@@ -1,0 +1,21 @@
+{
+  "providers": [
+    {
+      "id": "primary",
+      "endpoint": "https://api.openai.com/v1/responses",
+      "api": "responses",
+      "model": "YOUR_CODEX_MODEL",
+      "reasoningEffort": "high",
+      "apiKeyEnv": "BOT_MODEL_API_KEY"
+    },
+    {
+      "id": "alternative",
+      "endpoint": "https://YOUR_COMPATIBLE_PROVIDER/v1/chat/completions",
+      "model": "YOUR_ALTERNATIVE_MODEL",
+      "apiKeyEnv": "BOT_ALTERNATIVE_API_KEY"
+    }
+  ],
+  "provider": "primary",
+  "allowedOrigins": ["https://YOUR_T3_CLIENT_ORIGIN"],
+  "connectors": []
+}

@@ -1,3 +1,4 @@
+import { BotRouteScreen } from "./features/bot/BotRouteScreen";
 import { ComponentCatalogScreen } from "./features/development/ComponentCatalogScreen";
 import { PullRequestGuideStopScreen } from "./features/pull-requests/guide/PullRequestGuideScreen";
 import { PullRequestInlineCommentScreen } from "./features/pull-requests/PullRequestInlineCommentScreen";
@@ -218,6 +219,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       options: {
         title: "Settings",
       },
+    }),
+    SettingsBot: createNativeStackScreen({
+      screen: BotRouteScreen,
+      linking: "bot",
+      options: { title: "t3bot" },
     }),
     SettingsEnvironments: createNativeStackScreen({
       screen: SettingsEnvironmentsRouteScreen,

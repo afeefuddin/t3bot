@@ -58,6 +58,7 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  BotIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -2024,6 +2025,17 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:t3bot",
+    searchTerms: ["t3bot", "bot", "assistant", "memory", "responsibilities"],
+    title: "Open t3bot",
+    icon: <BotIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/bot" });
+    },
+  });
 
   actionItems.push({
     kind: "action",

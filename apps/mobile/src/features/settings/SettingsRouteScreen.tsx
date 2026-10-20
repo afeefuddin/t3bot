@@ -163,6 +163,7 @@ function SettingsIndexSections() {
       </SettingsSection>
 
       <SettingsSection title="Automations">
+        <SettingsRow icon="sparkles" label="t3bot" target="SettingsBot" />
         <SettingsRow icon="clock" label="Scheduled tasks" target="SettingsScheduledTasks" />
       </SettingsSection>
 

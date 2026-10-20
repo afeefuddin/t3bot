@@ -1,0 +1,15 @@
+.git
+.repos
+**/node_modules
+**/dist
+**/dist-electron
+.t3
+.t3bot
+**/.t3
+**/.t3bot
+.env
+.env.*
+apps/bot/config.json
+**/owner-token
+
+**/._*

@@ -1,0 +1,64 @@
+services:
+  bot:
+    build:
+      context: ../..
+      dockerfile: apps/bot/Dockerfile
+      target: bot
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:3780:3780"
+    environment:
+      T3BOT_CONFIG: /config/config.json
+      BOT_MODEL_API_KEY: ${BOT_MODEL_API_KEY:-}
+      BOT_ALTERNATIVE_API_KEY: ${BOT_ALTERNATIVE_API_KEY:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+    volumes:
+      - bot-state:/data/bot
+      - bot-provider:/home/node/.codex
+      - ./config.json:/config/config.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3780/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  executor:
+    build:
+      context: ../..
+      dockerfile: apps/bot/Dockerfile
+      target: executor
+    restart: unless-stopped
+    init: true
+    depends_on:
+      bot:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3773:3773"
+    environment:
+      T3BOT_URL: http://bot:3780
+      T3BOT_BRIDGE_ID: ${T3BOT_BRIDGE_ID:-}
+      T3BOT_BRIDGE_TOKEN: ${T3BOT_BRIDGE_TOKEN:-}
+      T3BOT_BRIDGE_PROJECT_IDS: "*"
+      T3BOT_BRIDGE_MODE: ${T3BOT_BRIDGE_MODE:-approval-required}
+      T3BOT_BRIDGE_INSTANCE_ID: ${T3BOT_BRIDGE_INSTANCE_ID:-codex}
+      T3BOT_BRIDGE_MODEL: ${T3BOT_BRIDGE_MODEL:?Set a worker model supported by your provider}
+      OPENAI_API_KEY: ${WORKER_OPENAI_API_KEY:-}
+    volumes:
+      - executor-state:/data/t3
+      - executor-workspace:/workspace
+      - executor-provider:/home/node/.codex
+volumes:
+  bot-state:
+  bot-provider:
+  executor-state:
+  executor-workspace:
+  executor-provider:

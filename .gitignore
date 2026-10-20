@@ -45,3 +45,7 @@ node_modules/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
+
+# Private t3bot configuration and runtime state
+.t3bot/
+apps/bot/config.json
