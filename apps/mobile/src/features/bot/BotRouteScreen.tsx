@@ -1,3 +1,4 @@
+import { BotProjectConnection } from "./BotProjectConnection";
 import { uuidv4 } from "../../lib/uuid";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { View } from "react-native";
@@ -296,7 +297,8 @@ export function BotRouteScreen() {
                       />
                     </View>
                   ))}
-                  <AppText>Execution environments</AppText>
+                  {client && <BotProjectConnection client={client} />}
+                  <AppText>Pair another server manually</AppText>
                   <AppTextInput
                     accessibilityLabel="Environment name"
                     placeholder="Laptop or cloud workspace"
@@ -358,6 +360,75 @@ export function BotRouteScreen() {
             </>
           ) : tab === "Activity" ? (
             <>
+              <AppText>Goals</AppText>
+              <AppText textRole="caption">
+                Ask t3bot to fix a problem in a connected project. It saves criteria and verifies
+                the work before completion.
+              </AppText>
+              {snapshot?.goals?.map((goal) => (
+                <View key={goal.id} className="gap-2 rounded-2xl border border-separator p-4">
+                  <AppText>
+                    {goal.title} · {goal.state}
+                  </AppText>
+                  <AppText>{goal.objective}</AppText>
+                  {goal.criteria.map((criterion, index) => (
+                    <View key={criterion}>
+                      <AppText>
+                        {index + 1}. {criterion}
+                      </AppText>
+                      {goal.evidence
+                        .filter((e) => e.criterion === index)
+                        .map((e) => (
+                          <AppText key={e.criterion} textRole="caption">
+                            {e.quote}
+                          </AppText>
+                        ))}
+                    </View>
+                  ))}
+                  {!!goal.reason && <AppText>{goal.reason}</AppText>}
+                  <View className="flex-row flex-wrap gap-2">
+                    <Button
+                      label={
+                        ["active", "verifying"].includes(goal.state)
+                          ? "Pause"
+                          : ["completed", "cancelled"].includes(goal.state)
+                            ? "Reopen"
+                            : "Resume"
+                      }
+                      onPress={() =>
+                        void run({
+                          type: "goal.state",
+                          requestId: id(),
+                          id: goal.id,
+                          revision: goal.revision,
+                          state: ["active", "verifying"].includes(goal.state) ? "paused" : "active",
+                          reason: "Owner changed goal state",
+                        })
+                      }
+                    />
+                    {!["completed", "cancelled"].includes(goal.state) && (
+                      <Button
+                        label="Cancel goal"
+                        tone="text"
+                        onPress={() =>
+                          void run({
+                            type: "goal.state",
+                            requestId: id(),
+                            id: goal.id,
+                            revision: goal.revision,
+                            state: "cancelled",
+                            reason: "Owner cancelled goal",
+                          })
+                        }
+                      />
+                    )}
+                  </View>
+                  <AppText textRole="caption">
+                    {goal.rounds}/{goal.roundLimit ?? 24} worker turns. Cancel running tasks
+                    separately.
+                  </AppText>
+                </View>
+              ))}
               <AppText>Responsibilities</AppText>
               <AppText textRole="caption">Create or edit a responsibility in chat.</AppText>
               {snapshot?.responsibilities.map((r) => (

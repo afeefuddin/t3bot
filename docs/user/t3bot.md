@@ -47,8 +47,38 @@ remains pending until the executor confirms the outcome. Closing the client does
 not stop hosted work. Work requiring an offline computer waits for that computer;
 it does not silently move to another machine.
 
-To investigate existing threads, ask t3bot to delegate that investigation to the
-appropriate environment and project. The worker uses the environment's T3 tools.
+## Connect projects and give it a goal
+
+In **t3bot → Settings → Connect your projects**, choose a connected T3 environment,
+select the projects the bot may access, and set its execution permission. Saving
+requires permission to change that environment's settings. The destination T3
+server remembers the connection across restarts; its machine must be able to
+reach the bot URL.
+
+The bot can read recent thread titles, status, models, and bounded message excerpts
+from those projects. For a full investigation it delegates to a worker with the
+environment's T3 tools. It can continue an idle existing thread or start a new
+thread, and chooses from that environment's available worker models.
+
+Ask for an outcome such as “Fix this bug in the connected project; reproduce it
+with a regression test and run the relevant existing tests.” t3bot records the
+objective and completion criteria as a goal, then coordinates work and a separate
+verification turn in the same workspace. A failed check can lead to another repair
+and verification pass. Goals and queued reviews survive bot restarts.
+
+Activity shows each goal's criteria, current state, blocking reason, verification
+quotes, and worker tasks. Completion requires a passing quote for every criterion
+from a completed verification turn, backed by commands the executor recorded as
+successful in that run. Missing or unknown exit codes cannot establish completion.
+The bot still assesses whether those checks actually prove the criteria; open the
+worker's T3 thread to inspect the full output and changes.
+
+Pause a goal to hold new work and reviews, resume it to continue, or cancel it to
+stop future dispatches. Running workers continue until separately cancelled.
+Reopening a completed goal clears its previous evidence and requires fresh
+verification. A goal starts with a budget of 24 worker turns. When further dispatch
+would exceed that budget, it blocks and asks for your input. Resuming an exhausted
+goal authorizes another 24 turns.
 
 ## Remember preferences
 
@@ -74,8 +104,9 @@ are coalesced rather than replayed once for every missed interval.
 
 ## Control access and recover work
 
-Pair execution environments from bot Settings and configure the returned grant
-on the destination T3 server. Revoke a grant there to block further commands.
+Use **Disconnect environment** in project connection settings to stop new dispatches
+and revoke its grant. Advanced manual pairing remains available for operators.
+Revoke a grant in bot Settings to block further commands.
 Stop any running work first if it must finish before access is removed.
 
 Results and questions remain in the conversation after reconnecting. Failed

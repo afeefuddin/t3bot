@@ -69,7 +69,15 @@ of a laptop execution server.
 
 ## Pair an executor
 
-Create an environment in bot Settings. On that T3 server, configure the returned
+For an environment already connected to your client, use **t3bot → Settings →
+Connect your projects**. Select explicit projects and the execution ceiling. This
+stores the private bridge token in that T3 server's secret store; public connection
+status omits it. Settings permission is required at the destination. Updates take
+effect without restarting the server. Disconnect persists across restarts, including
+when older environment-variable configuration is still present.
+
+For headless or manual setup, create an environment grant in bot Settings.
+On that T3 server, configure the returned
 bridge ID/token and the bot URL. Also set an explicit project allowlist (comma
 separated project IDs, or `*` to authorize all projects) and execution ceiling:
 
@@ -83,7 +91,9 @@ T3BOT_BRIDGE_MODE=approval-required
 
 Restart that server. It connects outward to the bot, so a laptop does not need a
 public inbound port. The bridge advertises its available worker providers,
-models, and supported options so t3bot can choose them for each task. Project
+models, supported options, and up to 30 recent authorized thread summaries so
+t3bot can choose context and workers for each goal. Summaries contain at most
+1,600 characters of the latest visible message per thread. Project
 defaults are optional. Older executors without a worker catalogue still need a
 project default or `T3BOT_BRIDGE_INSTANCE_ID`/`T3BOT_BRIDGE_MODEL` as a fallback.
 Provider binaries and credentials must be available on the executor. Existing
@@ -144,7 +154,7 @@ Keep backups and the owner credential private. Restore with the bot stopped:
 restore `bot.sqlite` into an empty bot home, restore the same owner credential,
 and keep configuration/provider secrets separately. Do not combine a restored
 main database with WAL/SHM files from another instance. Preserve executor T3
-state and workspace as well; the bot's database contains references to their
+state, secret store, and workspace as well; the bot's database contains references to their
 threads, not copies of their files. Reconcile executors after restoring an old
 backup before permitting fresh dispatches. Test restoration in an isolated home.
 

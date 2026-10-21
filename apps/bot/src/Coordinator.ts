@@ -1,3 +1,4 @@
+import type * as Jobs from "./Jobs.ts";
 import { stableId } from "@t3tools/shared/stableId";
 import { serialize } from "./json.ts";
 import { BotChatMessage, BotResponsibility } from "@t3tools/contracts/bot";
@@ -10,6 +11,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { BotError, isBotError } from "./config.ts";
 import * as Model from "./Model.ts";
 import * as Store from "./Store.ts";
+import { GoalWake } from "./Goals.ts";
 import { TaskWake } from "./taskWake.ts";
 import { toolRunner, silentTool, tools } from "./tools.ts";
 import {
@@ -28,6 +30,8 @@ const Payload = Schema.Struct({
   revision: Schema.optional(Schema.Number),
   taskId: Schema.optional(Schema.String),
   wake: Schema.optional(TaskWake),
+  goalId: Schema.optional(Schema.String),
+  goalWake: Schema.optional(GoalWake),
 });
 const Turn = Schema.Struct({
   messages: Schema.fromJsonString(Schema.Array(BotChatMessage)),
@@ -47,7 +51,7 @@ const decodeModelStep = Schema.decodeEffect(
 export class Coordinator extends Context.Service<
   Coordinator,
   {
-    readonly run: (job: Store.JobRow) => Effect.Effect<boolean, BotError>;
+    readonly run: (job: Jobs.JobRow) => Effect.Effect<boolean, BotError>;
   }
 >()("@t3tools/bot/Coordinator") {}
 
@@ -56,7 +60,7 @@ const make = Effect.gen(function* () {
   const store = yield* Store.Store;
   const model = yield* Model.Model;
   const invokeTool = yield* toolRunner;
-  const checkLease = (job: Store.JobRow) =>
+  const checkLease = (job: Jobs.JobRow) =>
     Effect.gen(function* () {
       const rows =
         yield* sql`SELECT id FROM jobs WHERE id=${job.id} AND generation=${job.generation} AND state='running'`;
@@ -72,12 +76,13 @@ const make = Effect.gen(function* () {
       const r = yield* decodeResponsibility(rows[0].data);
       return r.state === "active" && r.revision === payload.revision;
     });
-  const run = Effect.fn("BotCoordinator.run")(function* (job: Store.JobRow) {
+  const run = Effect.fn("BotCoordinator.run")(function* (job: Jobs.JobRow) {
     const payload = yield* decodePayload(job.data);
     const active = Effect.gen(function* () {
       return (
         (yield* checkResponsibility(payload)) &&
-        (!payload.wake || (yield* store.isTaskWakeCurrent(payload.wake)))
+        (!payload.wake || (yield* store.isTaskWakeCurrent(payload.wake))) &&
+        (!payload.goalWake || (yield* store.isGoalWakeCurrent(payload.goalWake)))
       );
     });
     if (!(yield* active)) return true;
@@ -150,7 +155,7 @@ const make = Effect.gen(function* () {
       }>`SELECT data FROM records WHERE kind='summary' AND id='main'`;
       const summary = summaries[0] ? yield* decodeSummary(summaries[0].data) : null;
       const messages: Array<BotChatMessage> = [
-        { role: "system", content: coordinatorContext(snapshot, now) },
+        { role: "system", content: coordinatorContext(snapshot, now, payload.goalWake?.goalId) },
       ];
       if (summary)
         messages.push({
@@ -207,12 +212,15 @@ const make = Effect.gen(function* () {
         snapshot.provider,
         turn.messages.map((message, index) =>
           index === 0 && message.role === "system"
-            ? { ...message, content: coordinatorContext(snapshot, currentTime) }
+            ? {
+                ...message,
+                content: coordinatorContext(snapshot, currentTime, payload.goalWake?.goalId),
+              }
             : message,
         ),
         job.kind === "memory_review"
           ? tools.filter((t) => t.function.name === "remember")
-          : job.kind === "task_wake"
+          : ["task_wake", "goal_wake"].includes(job.kind)
             ? [...tools, silentTool]
             : tools,
       );
@@ -226,7 +234,10 @@ const make = Effect.gen(function* () {
     const silent =
       response.message.tool_calls?.some((call) => call.function.name === "complete_silently") ??
       false;
-    if (silent && (job.kind !== "task_wake" || response.message.tool_calls?.length !== 1))
+    if (
+      silent &&
+      (!["task_wake", "goal_wake"].includes(job.kind) || response.message.tool_calls?.length !== 1)
+    )
       return yield* new BotError({ category: "invalid" });
     const next = [...turn.messages, response.message];
     for (const [index, call] of (response.message.tool_calls ?? []).entries()) {
@@ -240,6 +251,7 @@ const make = Effect.gen(function* () {
         requestId,
         messageId: payload.messageId,
         responsibilityId: payload.responsibilityId,
+        goalId: payload.goalWake?.goalId,
         commit: (decoded) =>
           sql.withTransaction(
             Effect.gen(function* () {
@@ -252,6 +264,7 @@ const make = Effect.gen(function* () {
                   ? { responsibilityId: payload.responsibilityId, revision: payload.revision }
                   : undefined,
                 job.id,
+                payload.goalWake,
               );
             }),
           ),

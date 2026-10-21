@@ -1,3 +1,4 @@
+import * as BotConnection from "./bot/BotConnection.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -1261,6 +1262,7 @@ const layerWsRpc = (
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const botConnection = yield* BotConnection.BotConnection;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -2061,6 +2063,19 @@ const layerWsRpc = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
+        [WS_METHODS.botGetConnection]: (_input) =>
+          botConnection.current.pipe(
+            Effect.map(
+              (connection) =>
+                connection && {
+                  url: connection.url,
+                  grantId: connection.grantId,
+                  projectIds: connection.projectIds,
+                  runtimeMode: connection.runtimeMode,
+                },
+            ),
+          ),
+        [WS_METHODS.botConfigureConnection]: (input) => botConnection.configure(input.connection),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>

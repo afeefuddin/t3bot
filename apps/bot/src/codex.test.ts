@@ -19,7 +19,12 @@ it.layer(NodeServices.layer)("Codex coordinator", (it) => {
     yield* fs.chmod(binary, 0o700);
     return yield* completeCodex(
       { id: "test", type: "codex", model: "test", binary },
-      [{ role: "user", content: mode }],
+      [
+        {
+          role: "user",
+          content: mode === "flaky" ? `flaky:${path.join(directory, "attempt")}` : mode,
+        },
+      ],
       [
         {
           type: "function",
@@ -39,6 +44,13 @@ it.layer(NodeServices.layer)("Codex coordinator", (it) => {
         name: "remember",
         arguments: '{"text":"tea"}',
       });
+    }),
+  );
+  it.effect("retries a malformed decision once before any host tools execute", () =>
+    Effect.gen(function* () {
+      const reply = yield* run("flaky");
+      assert.equal(reply.message.content, "A real-shaped response.");
+      assert.isUndefined(reply.message.tool_calls);
     }),
   );
   it.effect.each(["invalid", "unknown", "failed", "exit"])("fails when Codex returns %s", (mode) =>

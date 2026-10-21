@@ -2,13 +2,46 @@ import * as Schema from "effect/Schema";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderOptionDescriptor, ProviderOptionSelections } from "./model.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
-import { ProviderInteractionMode } from "./providerPolicy.ts";
+import { RuntimeMode, ProviderInteractionMode } from "./providerPolicy.ts";
 
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32000));
 const Title = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200));
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160));
 const Revision = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
 export const BOT_PROTOCOL_VERSION = 1;
+
+export const BotBridgeConnectionConfig = Schema.Struct({
+  url: Schema.String.check(Schema.isMinLength(1)),
+  grantId: Id,
+  token: Schema.String.check(Schema.isMinLength(24)),
+  projectIds: Schema.Array(Id).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+  runtimeMode: RuntimeMode,
+});
+export type BotBridgeConnectionConfig = typeof BotBridgeConnectionConfig.Type;
+export const BotBridgeConnectionInput = Schema.Struct({
+  ...BotBridgeConnectionConfig.fields,
+  token: Schema.optionalKey(Schema.String.check(Schema.isMinLength(24))),
+});
+export type BotBridgeConnectionInput = typeof BotBridgeConnectionInput.Type;
+export const BotBridgeConnectionStatus = Schema.NullOr(
+  Schema.Struct({
+    url: Schema.String,
+    grantId: Id,
+    projectIds: Schema.Array(Id),
+    runtimeMode: RuntimeMode,
+  }),
+);
+export class BotConnectionError extends Schema.TaggedError<BotConnectionError>()(
+  "BotConnectionError",
+  {
+    category: Schema.Literals(["configuration", "storage"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message() {
+    return `Bot connection failed (${this.category}).`;
+  }
+}
 
 export const BotAvatar = Schema.Struct({
   shape: Schema.Literals(["rounded", "square", "circle"]),
@@ -45,7 +78,83 @@ export const BotSchedule = Schema.Union([
 ]);
 export type BotSchedule = typeof BotSchedule.Type;
 
+export const BOT_MAX_VERIFICATION_CHECKS = 32;
+export const BotVerificationCheck = Schema.Struct({
+  id: Id,
+  runId: Id,
+  command: Schema.String.check(Schema.isMaxLength(2048)),
+  output: Schema.String.check(Schema.isMaxLength(1500)),
+  exitCode: Schema.NullOr(Schema.Int),
+  outcome: Schema.Literals(["passed", "failed", "unknown"]),
+});
+export type BotVerificationCheck = typeof BotVerificationCheck.Type;
+const VerificationChecks = Schema.Array(BotVerificationCheck).check(
+  Schema.isMaxLength(BOT_MAX_VERIFICATION_CHECKS),
+);
+
+export const BotGoalEvidence = Schema.Struct({
+  criterion: Revision,
+  taskId: Id,
+  generation: Revision,
+  runId: Id,
+  quote: Text,
+  checkIds: Schema.optionalKey(
+    Schema.Array(Id).check(Schema.isMinLength(1), Schema.isMaxLength(BOT_MAX_VERIFICATION_CHECKS)),
+  ),
+});
+export const BotGoal = Schema.Struct({
+  id: Id,
+  revision: Revision,
+  generation: Revision,
+  title: Title,
+  objective: Text,
+  criteria: Schema.Array(Text).check(Schema.isMinLength(1), Schema.isMaxLength(12)),
+  environmentId: Id,
+  projectId: Id,
+  state: Schema.Literals(["active", "verifying", "blocked", "paused", "completed", "cancelled"]),
+  reason: Schema.String,
+  evidence: Schema.Array(BotGoalEvidence),
+  rounds: Revision,
+  roundLimit: Schema.optionalKey(Revision),
+  nextAt: Schema.NullOr(Schema.Number),
+  updatedAt: Schema.Number,
+});
+export type BotGoal = typeof BotGoal.Type;
+
 export const BotCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("goal.create"),
+    requestId: Id,
+    id: Id,
+    title: Title,
+    objective: Text,
+    criteria: BotGoal.fields.criteria,
+    environmentId: Id,
+    projectId: Id,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("goal.state"),
+    requestId: Id,
+    id: Id,
+    revision: Revision,
+    state: Schema.Literals(["active", "blocked", "paused", "cancelled"]),
+    reason: Text,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("goal.verify"),
+    requestId: Id,
+    id: Id,
+    revision: Revision,
+    taskId: Id,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("goal.complete"),
+    requestId: Id,
+    id: Id,
+    revision: Revision,
+    summary: Text,
+    evidence: Schema.Array(BotGoalEvidence).check(Schema.isMinLength(1), Schema.isMaxLength(12)),
+  }),
   Schema.Struct({
     type: Schema.Literal("avatar.save"),
     requestId: Id,
@@ -93,6 +202,8 @@ export const BotCommand = Schema.Union([
   Schema.Struct({ type: Schema.Literal("responsibility.run"), requestId: Id, id: Id }),
   Schema.Struct({
     type: Schema.Literal("task.start"),
+    goalId: Schema.optionalKey(Id),
+    threadId: Schema.optionalKey(Id),
     requestId: Id,
     title: Title,
     instructions: Text,
@@ -173,6 +284,10 @@ export const BotTaskStatus = Schema.Literals([
   "cancelled",
 ]);
 export const BotTask = Schema.Struct({
+  existingThread: Schema.optionalKey(Schema.Boolean),
+  goalId: Schema.optionalKey(Id),
+  purpose: Schema.optionalKey(Schema.Literals(["work", "verification"])),
+  checks: Schema.optionalKey(VerificationChecks),
   id: Id,
   title: Title,
   instructions: Text,
@@ -190,6 +305,17 @@ export const BotTask = Schema.Struct({
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
 });
 export type BotTask = typeof BotTask.Type;
+export const BotThreadContext = Schema.Struct({
+  isolated: Schema.optionalKey(Schema.Boolean),
+  id: Id,
+  projectId: Id,
+  title: Schema.String,
+  status: Schema.String,
+  updatedAt: Schema.Number,
+  modelSelection: ModelSelection,
+  excerpt: Schema.String.check(Schema.isMaxLength(1600)),
+});
+export type BotThreadContext = typeof BotThreadContext.Type;
 export const BotProject = Schema.Struct({
   id: Id,
   title: Schema.String,
@@ -214,6 +340,7 @@ export const BotEnvironment = Schema.Struct({
   revoked: Schema.Boolean,
   lastSeen: Schema.Number,
   projects: Schema.Array(BotProject),
+  threads: Schema.optionalKey(Schema.Array(BotThreadContext).check(Schema.isMaxLength(30))),
   providers: Schema.optionalKey(Schema.Array(BotWorkerProvider)),
 });
 export type BotEnvironment = typeof BotEnvironment.Type;
@@ -245,6 +372,7 @@ export const BotSnapshot = Schema.Struct({
   memories: Schema.Array(BotMemory),
   responsibilities: Schema.Array(BotResponsibility),
   tasks: Schema.Array(BotTask),
+  goals: Schema.optionalKey(Schema.Array(BotGoal)),
   environments: Schema.Array(BotEnvironment),
   jobs: Schema.Array(BotJob),
   providers: Schema.Array(Id),
@@ -256,10 +384,12 @@ export const BotSnapshot = Schema.Struct({
 export type BotSnapshot = typeof BotSnapshot.Type;
 
 export const BotBridgeCommand = Schema.Struct({
+  purpose: BotTask.fields.purpose,
+  existingThread: Schema.optionalKey(Schema.Boolean),
   id: Id,
   taskId: Id,
   generation: Schema.Number,
-  kind: Schema.Literals(["start", "followup", "cancel", "inspect"]),
+  kind: Schema.Literals(["start", "continue", "followup", "cancel", "inspect"]),
   projectId: Id,
   threadId: Id,
   runId: Schema.NullOr(Id),
@@ -274,9 +404,11 @@ export const BotBridgePoll = Schema.Struct({
   protocol: Schema.Literal(1),
   identity: Id,
   projects: Schema.Array(BotProject),
+  threads: Schema.optionalKey(Schema.Array(BotThreadContext).check(Schema.isMaxLength(30))),
   providers: Schema.optionalKey(Schema.Array(BotWorkerProvider)),
 });
 export const BotBridgeReport = Schema.Struct({
+  checks: Schema.optionalKey(VerificationChecks),
   retryable: Schema.optionalKey(Schema.Boolean),
   commandId: Id,
   taskId: Id,

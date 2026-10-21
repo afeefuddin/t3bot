@@ -1,3 +1,4 @@
+import { codexCoordinatorInstructions, codexModelStepInstructions } from "./prompts.ts";
 import type { BotChatMessage } from "@t3tools/contracts/bot";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as Deferred from "effect/Deferred";
@@ -72,14 +73,8 @@ const codexStep = Effect.fn("bot/codexStep")(function* (
     ephemeral: true,
     approvalPolicy: "never",
     sandbox: "read-only",
-    baseInstructions:
-      "You are t3bot's coordinator model. Follow the system instructions in the supplied conversation. " +
-      "Return the next assistant decision as JSON. content is the user-facing reply or null. " +
-      "calls are requested coordinator functions; arguments must be a JSON object encoded as a string. " +
-      "Use only the supplied function definitions, at most four calls. Use an empty calls array for a reply. " +
-      "Tool requests are intentions, not completed actions. The host executes them and supplies results in a later conversation. " +
-      "Do not use Codex tools, read files, run commands, or perform side effects yourself.",
-    developerInstructions: `This is one model step. Your configured model is ${model}. Do not claim a different model.`,
+    baseInstructions: codexCoordinatorInstructions,
+    developerInstructions: codexModelStepInstructions(model),
     config: {
       "features.shell_tool": false,
       "features.multi_agent": false,
@@ -157,4 +152,6 @@ export const completeCodex = Effect.fn("bot/completeCodex")(
   Effect.mapError((cause) =>
     isBotError(cause) ? cause : new BotError({ category: "unavailable", cause }),
   ),
+  // An invalid model decision has not reached the host tool loop, so one fresh request is safe.
+  Effect.retry({ times: 1, while: (error) => error.category === "invalid" }),
 );

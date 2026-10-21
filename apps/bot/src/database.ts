@@ -13,9 +13,9 @@ const setup = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* sql`CREATE TABLE IF NOT EXISTS bot_schema (version INTEGER PRIMARY KEY)`;
       const versions = yield* sql<{ version: number }>`SELECT version FROM bot_schema`;
-      if (versions.some((row) => row.version > 3))
+      if (versions.some((row) => row.version > 4))
         return yield* Effect.die(new Error("Bot database was created by a newer version"));
-      if (versions.some((row) => row.version === 3)) return;
+      if (versions.some((row) => row.version === 4)) return;
       if (versions.length === 0) {
         yield* sql`CREATE TABLE messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, role TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL)`;
         yield* sql`CREATE VIRTUAL TABLE history_search USING fts5(text, content='messages', content_rowid='seq')`;
@@ -32,13 +32,15 @@ const setup = Effect.gen(function* () {
         yield* sql`CREATE TABLE model_steps (id TEXT PRIMARY KEY, data TEXT NOT NULL)`;
         yield* sql`INSERT INTO bot_schema VALUES (1)`;
       }
-      if (!versions.some((row) => row.version === 2)) {
+      if (!versions.some((row) => row.version >= 2)) {
         yield* sql`CREATE TABLE connector_routes (source_id TEXT PRIMARY KEY, connector_id TEXT NOT NULL, destination TEXT NOT NULL)`;
         yield* sql`CREATE TABLE connector_deliveries (id TEXT PRIMARY KEY, connector_id TEXT NOT NULL, destination TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, due_at INTEGER NOT NULL, lease_until INTEGER, generation INTEGER NOT NULL DEFAULT 0, error TEXT)`;
         yield* sql`CREATE INDEX connector_deliveries_due ON connector_deliveries(state,due_at)`;
       }
-      yield* sql`ALTER TABLE environments ADD COLUMN providers TEXT NOT NULL DEFAULT '[]'`;
-      yield* sql`UPDATE bot_schema SET version=3`;
+      if (!versions.some((row) => row.version === 3))
+        yield* sql`ALTER TABLE environments ADD COLUMN providers TEXT NOT NULL DEFAULT '[]'`;
+      yield* sql`ALTER TABLE environments ADD COLUMN threads TEXT NOT NULL DEFAULT '[]'`;
+      yield* sql`UPDATE bot_schema SET version=4`;
     }),
   );
 });

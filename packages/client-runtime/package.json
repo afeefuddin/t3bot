@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./state/bot": {
+      "types": "./src/state/bot.ts",
+      "default": "./src/state/bot.ts"
+    },
     "./bot-avatar": {
       "types": "./src/botAvatar.ts",
       "default": "./src/botAvatar.ts"

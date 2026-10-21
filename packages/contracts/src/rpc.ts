@@ -1,3 +1,4 @@
+import { BotBridgeConnectionInput, BotBridgeConnectionStatus, BotConnectionError } from "./bot.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -462,6 +463,8 @@ export const WS_METHODS = {
   deviceDetail: "device.detail",
   deviceAction: "device.action",
 
+  botGetConnection: "bot.getConnection",
+  botConfigureConnection: "bot.configureConnection",
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
@@ -582,6 +585,17 @@ const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, 
   payload: ServerRemoveKeybindingInput,
   success: ServerRemoveKeybindingResult,
   error: Schema.Union([KeybindingsConfigError, EnvironmentAuthorizationError]),
+});
+
+const WsBotGetConnectionRpc = Rpc.make(WS_METHODS.botGetConnection, {
+  payload: Schema.Struct({}),
+  success: BotBridgeConnectionStatus,
+  error: EnvironmentAuthorizationError,
+});
+const WsBotConfigureConnectionRpc = Rpc.make(WS_METHODS.botConfigureConnection, {
+  payload: Schema.Struct({ connection: Schema.NullOr(BotBridgeConnectionInput) }),
+  success: BotBridgeConnectionStatus,
+  error: Schema.Union([BotConnectionError, EnvironmentAuthorizationError]),
 });
 
 const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
@@ -1853,6 +1867,8 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 ) {}
 
 export const WsRpcGroup = RpcGroup.make(
+  WsBotGetConnectionRpc,
+  WsBotConfigureConnectionRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

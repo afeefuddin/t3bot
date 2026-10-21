@@ -1,8 +1,10 @@
-import type { BotBridgeReport } from "@t3tools/contracts/bot";
-import type { OrchestrationV2RunStatus } from "@t3tools/contracts";
+import { BOT_MAX_VERIFICATION_CHECKS, type BotBridgeReport } from "@t3tools/contracts/bot";
+import { stableId } from "@t3tools/shared/stableId";
+import type { OrchestrationV2RunStatus, OrchestrationV2TurnItem } from "@t3tools/contracts";
 
 export function summarizeBotRun(
   projection: {
+    readonly turnItems?: ReadonlyArray<OrchestrationV2TurnItem>;
     readonly runs: ReadonlyArray<{
       readonly id: string;
       readonly status: OrchestrationV2RunStatus;
@@ -16,9 +18,10 @@ export function summarizeBotRun(
     }>;
   },
   runId: string | null,
-): Pick<BotBridgeReport, "runId" | "status" | "result"> {
+  collectChecks = false,
+): Pick<BotBridgeReport, "runId" | "status" | "result" | "checks"> {
   const latest = [...projection.runs].sort((a, b) => b.ordinal - a.ordinal)[0];
-  const run = (runId ? projection.runs.find((r) => r.id === runId) : undefined) ?? latest;
+  const run = runId ? projection.runs.find((r) => r.id === runId) : latest;
   let status: BotBridgeReport["status"] = "accepted";
   switch (run?.status) {
     case "running":
@@ -44,5 +47,28 @@ export function summarizeBotRun(
     .map((m) => m.text)
     .join("\n")
     .slice(-32000);
-  return { runId: run?.id ?? null, status, result };
+  const checks =
+    run && collectChecks && status === "completed"
+      ? (projection.turnItems ?? [])
+          .filter((item) => item.type === "command_execution")
+          .filter((item) => item.runId === run.id)
+          .sort((a, b) => a.ordinal - b.ordinal)
+          .slice(-BOT_MAX_VERIFICATION_CHECKS)
+          .map((item) => ({
+            id: stableId("verification-check", item.id),
+            runId: run.id,
+            command: item.input.slice(0, 2048),
+            output: (item.output ?? "").slice(-1500),
+            exitCode: item.exitCode ?? null,
+            outcome:
+              item.exitCode === 0 && item.status === "completed" && !item.outputIndicatesFailure
+                ? ("passed" as const)
+                : item.outputIndicatesFailure ||
+                    item.status === "failed" ||
+                    (item.exitCode !== undefined && item.exitCode !== 0)
+                  ? ("failed" as const)
+                  : ("unknown" as const),
+          }))
+      : [];
+  return { runId: run?.id ?? null, status, result, checks };
 }

@@ -1,3 +1,4 @@
+import * as NodeFS from "node:fs";
 import * as NodeReadline from "node:readline";
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 for await (const line of NodeReadline.createInterface({ input: process.stdin })) {
@@ -53,8 +54,17 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
     if (mode === "exit") process.exit(7);
     const turn = { id: "turn", items: [], status: "completed", error: null };
     send({ id, result: { turn } });
+    let invalidOnce = false;
+    if (mode.startsWith("flaky:")) {
+      try {
+        NodeFS.writeFileSync(mode.slice(6), "attempted", { flag: "wx" });
+        invalidOnce = true;
+      } catch (cause) {
+        if (cause.code !== "EEXIST") throw cause;
+      }
+    }
     const text =
-      mode === "invalid"
+      mode === "invalid" || invalidOnce
         ? "invalid json"
         : JSON.stringify(
             mode === "remember"

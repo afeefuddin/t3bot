@@ -59,6 +59,31 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires settings permission on the destination to connect a bot", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const connection = createCommandPermissions(runtime, WS_METHODS.botConfigureConnection);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(connection.permissionAtom(env))).toBe(false);
+        expect((yield* connection.authorize(registry, env).pipe(Effect.result))._tag).toBe(
+          "Failure",
+        );
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthSettingsWriteScope],
+            permissions: [AuthSettingsWriteScope],
+          }),
+        );
+        expect(registry.get(connection.permissionAtom(env))).toBe(true);
+        yield* connection.authorize(registry, env);
+        expect(registry.get(connection.permissionAtom(other))).toBe(false);
+      }),
+    ),
+  );
+
   it.effect("requires the destination settings grant to run storage cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

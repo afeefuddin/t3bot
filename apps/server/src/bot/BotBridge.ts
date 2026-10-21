@@ -1,3 +1,5 @@
+import { RunId } from "@t3tools/contracts";
+import * as BotConnection from "./BotConnection.ts";
 import { stableId } from "@t3tools/shared/stableId";
 import { isBotWorkerSelectionAvailable } from "@t3tools/shared/botWorkers";
 import { summarizeBotRun } from "./projection.ts";
@@ -7,15 +9,11 @@ import {
   BotBridgePollResult,
   type BotBridgeReport,
   type BotWorkerProvider,
+  type BotBridgeConnectionConfig,
 } from "@t3tools/contracts/bot";
-import {
-  CommandId,
-  MessageId,
-  ThreadId,
-  RuntimeMode,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
+import { CommandId, MessageId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -47,11 +45,11 @@ export class BotBridge extends Context.Service<
   }
 >()("t3/bot/BotBridge") {}
 
-const decodeMode = Schema.decodeUnknownEffect(RuntimeMode);
 const decodePoll = Schema.decodeUnknownEffect(BotBridgePollResult);
 const isBotBridgeError = Schema.is(BotBridgeError);
 const make = Effect.gen(function* () {
   const env = yield* HostProcess.Environment;
+  const connections = yield* BotConnection.BotConnection;
   const launch = yield* ThreadLaunch.ThreadLaunchService;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectStore.ProjectStoreV2;
@@ -84,10 +82,6 @@ const make = Effect.gen(function* () {
         })),
       }));
   });
-  const base = (env.T3BOT_URL ?? "").replace(/\/$/, "");
-  const grant = env.T3BOT_BRIDGE_ID ?? "";
-  const token = env.T3BOT_BRIDGE_TOKEN ?? "";
-  const allowed = new Set((env.T3BOT_BRIDGE_PROJECT_IDS ?? "").split(",").map((s) => s.trim()));
   const modelFor = (project: {
     defaultModelSelection: { instanceId: ProviderInstanceId; model: string } | null;
   }) =>
@@ -98,9 +92,14 @@ const make = Effect.gen(function* () {
           model: env.T3BOT_BRIDGE_MODEL,
         }
       : null);
-  const mode = yield* decodeMode(env.T3BOT_BRIDGE_MODE ?? "approval-required");
   const rank = { "approval-required": 0, "auto-accept-edits": 1, auto: 2, "full-access": 3 };
-  const execute = Effect.fn("BotBridge.execute")(function* (command: BotBridgeCommand) {
+  const execute = Effect.fn("BotBridge.execute")(function* (
+    command: BotBridgeCommand,
+    connection: BotBridgeConnectionConfig,
+  ) {
+    const allowed = new Set(connection.projectIds);
+    const grant = connection.grantId;
+    const mode = connection.runtimeMode;
     if (!allowed.has("*") && !allowed.has(command.projectId))
       return yield* new BotBridgeError({ category: "scope" });
     const catalog = yield* projects.list();
@@ -148,12 +147,21 @@ const make = Effect.gen(function* () {
       } satisfies BotBridgeReport;
     if (
       projection.thread.projectId !== project.projectId ||
-      projection.thread.createdBy !== "agent" ||
-      projection.thread.creationSource !== "server" ||
+      (!command.existingThread &&
+        (projection.thread.createdBy !== "agent" ||
+          projection.thread.creationSource !== "server")) ||
       rank[projection.thread.runtimeMode] > rank[mode]
     )
       return yield* new BotBridgeError({ category: "scope" });
-    if (command.kind === "followup") {
+    if (
+      command.kind === "continue" &&
+      !projection.messages.some((message) => message.id === messageId) &&
+      projection.runs.some((run) =>
+        ["preparing", "starting", "running", "waiting", "queued"].includes(run.status),
+      )
+    )
+      return yield* new BotBridgeError({ category: "scope" });
+    if (command.kind === "followup" || command.kind === "continue") {
       const sent = yield* threads.sendToThread({
         projectId: project.projectId,
         commandId,
@@ -162,6 +170,7 @@ const make = Effect.gen(function* () {
         text: command.text,
         attachments: [],
         mode: "queue",
+        ...(command.modelSelection ? { modelSelection: command.modelSelection } : {}),
         createdBy: "agent",
         creationSource: "server",
       });
@@ -170,10 +179,14 @@ const make = Effect.gen(function* () {
         commandId: command.id,
         taskId: command.taskId,
         threadId: command.threadId,
-        ...summarizeBotRun(projection, sent.run.id),
+        ...summarizeBotRun(projection, sent.run.id, command.purpose === "verification"),
       };
     } else if (command.kind === "cancel") {
-      for (const run of projection.runs.filter((run) => run.status === "queued")) {
+      if (command.existingThread && !command.runId)
+        return yield* new BotBridgeError({ category: "scope" });
+      for (const run of projection.runs.filter(
+        (run) => run.status === "queued" && (!command.runId || run.id === command.runId),
+      )) {
         yield* threads.dispatch({
           type: "queued-run.cancel",
           commandId: CommandId.make(stableId("bot-cancel", commandId, run.id)),
@@ -185,12 +198,13 @@ const make = Effect.gen(function* () {
         projectId: project.projectId,
         commandId,
         threadId,
+        ...(command.runId ? { runId: RunId.make(command.runId) } : {}),
         reason: "Cancelled by t3bot owner",
       });
       projection = yield* threads.getThreadProjection(threadId);
     }
     const active = projection.runs.find((run) =>
-      ["preparing", "running", "waiting", "queued"].includes(run.status),
+      ["preparing", "starting", "running", "waiting", "queued"].includes(run.status),
     );
     return {
       commandId: command.id,
@@ -198,15 +212,18 @@ const make = Effect.gen(function* () {
       threadId: command.threadId,
       ...summarizeBotRun(
         projection,
-        command.kind === "cancel" ? (active?.id ?? null) : command.runId,
+        command.kind === "cancel" ? (command.runId ?? active?.id ?? null) : command.runId,
+        command.purpose === "verification",
       ),
     };
   });
-  const send = (path: string, body: unknown) =>
+  const send = (connection: BotBridgeConnectionConfig, path: string, body: unknown) =>
     http
       .execute(
-        HttpClientRequest.post(`${base}/bridge/${encodeURIComponent(grant)}/${path}`).pipe(
-          HttpClientRequest.setHeader("authorization", `Bearer ${token}`),
+        HttpClientRequest.post(
+          `${connection.url}/bridge/${encodeURIComponent(connection.grantId)}/${path}`,
+        ).pipe(
+          HttpClientRequest.setHeader("authorization", `Bearer ${connection.token}`),
           HttpClientRequest.bodyJsonUnsafe(body),
         ),
       )
@@ -223,11 +240,70 @@ const make = Effect.gen(function* () {
           isBotBridgeError(cause) ? cause : new BotBridgeError({ category: "transport", cause }),
         ),
       );
+  const excerpts = new Map<string, { updatedAt: number; text: string }>();
   const tick = Effect.gen(function* () {
+    const connection = yield* connections.current;
+    if (!connection) return;
+    const allowed = new Set(connection.projectIds);
+    const mode = connection.runtimeMode;
     const projectList = (yield* projects.list()).filter(
       (p) => p.deletedAt === null && (allowed.has("*") || allowed.has(p.projectId)),
     );
-    const poll = yield* send("poll", {
+    const authorizedProjects = new Set(projectList.map((p) => p.projectId));
+    const recentThreads = (yield* threads.getShellSnapshot({ location: "active" })).threads
+      .filter(
+        (thread) =>
+          authorizedProjects.has(thread.projectId) &&
+          thread.deletedAt === null &&
+          thread.archivedAt === null &&
+          thread.lineage.relationshipToParent !== "subagent",
+      )
+      .toSorted((a, b) => DateTime.toEpochMillis(b.updatedAt) - DateTime.toEpochMillis(a.updatedAt))
+      .slice(0, 30);
+    const visible = new Set<string>(recentThreads.map((thread) => thread.id));
+    for (const id of excerpts.keys()) if (!visible.has(id)) excerpts.delete(id);
+    const threadContext = yield* Effect.forEach(
+      recentThreads,
+      (thread) =>
+        Effect.gen(function* () {
+          const updatedAt = DateTime.toEpochMillis(thread.updatedAt);
+          let excerpt = excerpts.get(thread.id);
+          if (!excerpt || excerpt.updatedAt !== updatedAt) {
+            // Shell snapshots omit message text. Read a bounded window only when context changes.
+            const text = yield* threads.getThreadSnapshotWindow(thread.id, { rowLimit: 8 }).pipe(
+              Effect.map(
+                ({ projection }) =>
+                  projection.visibleTurnItems
+                    .map(({ item }) => item)
+                    .filter(
+                      (item) => item.type === "assistant_message" || item.type === "user_message",
+                    )
+                    .findLast((item) => item.text.trim())
+                    ?.text.slice(-1600) ?? "",
+              ),
+              Effect.tap((text) =>
+                Effect.sync(() => {
+                  excerpts.set(thread.id, { updatedAt, text });
+                }),
+              ),
+              Effect.catch(() => Effect.succeed("")),
+            );
+            excerpt = { updatedAt, text };
+          }
+          return {
+            id: thread.id,
+            projectId: thread.projectId,
+            title: thread.title,
+            status: thread.status,
+            updatedAt,
+            modelSelection: thread.modelSelection,
+            isolated: thread.worktreePath !== null,
+            excerpt: excerpt.text,
+          };
+        }),
+      { concurrency: 4 },
+    );
+    const poll = yield* send(connection, "poll", {
       protocol: 1,
       identity: yield* identity.getEnvironmentId,
       projects: projectList.map((p) => ({
@@ -236,21 +312,22 @@ const make = Effect.gen(function* () {
         ...modelFor(p),
       })),
       providers: yield* workerProviders,
+      threads: threadContext,
     }).pipe(Effect.flatMap(decodePoll));
     yield* Effect.forEach(
       poll.commands,
       (command) =>
-        execute(command).pipe(
+        execute(command, connection).pipe(
           Effect.provideService(DispatchModeLimit, {
             runtimeMode: mode,
             interactionMode: "default",
           }),
-          Effect.flatMap((report) => send("report", report)),
+          Effect.flatMap((report) => send(connection, "report", report)),
           // Keep uncertain transport/execution outcomes pending: the next delivery reconciles the same command.
           Effect.catch((cause) =>
             isBotBridgeError(cause) &&
             (cause.category === "configuration" || cause.category === "scope")
-              ? send("report", {
+              ? send(connection, "report", {
                   commandId: command.id,
                   taskId: command.taskId,
                   threadId: command.threadId,
@@ -278,41 +355,33 @@ const make = Effect.gen(function* () {
   return BotBridge.of({
     execute: (command) =>
       wrap(
-        execute(command).pipe(
-          Effect.provideService(DispatchModeLimit, {
-            runtimeMode: mode,
-            interactionMode: "default",
-          }),
-        ),
+        Effect.gen(function* () {
+          const connection = yield* connections.current;
+          if (!connection) return yield* new BotBridgeError({ category: "configuration" });
+          return yield* execute(command, connection).pipe(
+            Effect.provideService(DispatchModeLimit, {
+              runtimeMode: connection.runtimeMode,
+              interactionMode: "default",
+            }),
+          );
+        }),
       ),
     tick: wrap(tick),
   });
 });
 
 export const serviceLayer = Layer.effect(BotBridge, make);
-export const layer = Layer.unwrap(
+export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const env = yield* HostProcess.Environment;
-    if (!env.T3BOT_URL) return Layer.empty;
-    if (!env.T3BOT_BRIDGE_ID || !env.T3BOT_BRIDGE_TOKEN || !env.T3BOT_BRIDGE_PROJECT_IDS)
-      return Layer.effectDiscard(
-        Effect.logWarning(
-          "Bot bridge disabled: configure bridge ID, token, and allowed project IDs",
+    const bridge = yield* BotBridge;
+    yield* forkParked(
+      bridge.tick.pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Bot bridge reconnect pending", { category: cause.category }),
         ),
-      );
-    return Layer.effectDiscard(
-      Effect.gen(function* () {
-        const bridge = yield* BotBridge;
-        yield* forkParked(
-          bridge.tick.pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("Bot bridge reconnect pending", { category: cause.category }),
-            ),
-            Effect.andThen(Effect.sleep("2 seconds")),
-            Effect.forever,
-          ),
-        );
-      }),
-    ).pipe(Layer.provide(serviceLayer));
+        Effect.andThen(Effect.sleep("2 seconds")),
+        Effect.forever,
+      ),
+    );
   }),
-);
+).pipe(Layer.provide(serviceLayer));

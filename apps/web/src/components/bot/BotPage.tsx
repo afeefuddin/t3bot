@@ -1,3 +1,5 @@
+import { BotProjectConnection } from "./BotProjectConnection";
+import { BotGoalRow } from "./BotGoalRow";
 import { observeResize } from "~/lib/observeResize";
 import { randomUUID } from "~/lib/utils";
 import { useNavigate } from "@tanstack/react-router";
@@ -435,7 +437,8 @@ export function BotPage() {
                       </Button>
                     </div>
                   ))}
-                  <h2 className="pt-4 font-medium">Execution environments</h2>
+                  {client && <BotProjectConnection client={client} />}
+                  <h2 className="pt-4 font-medium">Pair another server manually</h2>
                   <div className="flex gap-2">
                     <Input
                       aria-label="Environment name"
@@ -584,7 +587,33 @@ export function BotPage() {
             </>
           ) : (
             <>
-              <h2 className="font-medium">Responsibilities</h2>
+              <h2 className="font-medium">Goals</h2>
+              <p className="text-sm text-muted-foreground">
+                Ask t3bot to investigate or fix a problem in a connected project. It will save
+                completion criteria and verify the work before closing the goal.
+              </p>
+              {!snapshot?.goals?.length && (
+                <p className="text-sm text-muted-foreground">Project goals will appear here.</p>
+              )}
+              {snapshot?.goals?.map((goal) => (
+                <BotGoalRow
+                  key={goal.id}
+                  goal={goal}
+                  tasks={snapshot.tasks}
+                  run={run}
+                  openThread={(threadId, environmentId) => {
+                    const identity = snapshot.environments.find(
+                      (e) => e.id === environmentId,
+                    )?.identity;
+                    if (identity)
+                      void navigate({
+                        to: "/$environmentId/$threadId",
+                        params: { environmentId: identity, threadId },
+                      });
+                  }}
+                />
+              ))}
+              <h2 className="pt-3 font-medium">Responsibilities</h2>
               <p className="text-sm text-muted-foreground">
                 Create or edit ongoing responsibilities in chat—for example, “Every weekday at 9 in
                 Asia/Kolkata, review my active work.”
