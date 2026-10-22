@@ -147,6 +147,16 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
+  it.effect("isolates the browser profile when a separate T3 home is configured", () =>
+    withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        assert.equal(yield* identity.resolveUserDataPath, "/sandbox/t3bot/desktop");
+      }),
+      { environment: { env: { T3CODE_HOME: "/sandbox/t3bot" } } },
+    ),
+  );
+
   it.effect("isolates the V2 profile even when the legacy V1 profile exists", () =>
     withIdentity(
       Effect.gen(function* () {

@@ -85,9 +85,13 @@ export const make = Effect.gen(function* () {
     return commitHash;
   });
 
-  const userDataPath = DesktopUserData.resolveUserDataPath(environment).pipe(
-    Effect.provide(userDataContext),
-  );
+  // A custom T3 home must isolate Chromium's locks as well as server state.
+  const defaultBaseDir = environment.path.join(environment.homeDirectory, ".t3");
+  const userDataPath = (
+    environment.path.resolve(environment.baseDir) === defaultBaseDir
+      ? DesktopUserData.resolveUserDataPath(environment)
+      : Effect.succeed(environment.path.join(environment.baseDir, "desktop"))
+  ).pipe(Effect.provide(userDataContext));
 
   const configure = Effect.gen(function* () {
     const commitHash = yield* resolveAboutCommitHash;
