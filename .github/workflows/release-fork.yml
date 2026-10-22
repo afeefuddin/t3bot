@@ -1,0 +1,115 @@
+name: Release t3bot desktop
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-t3bot-desktop
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'afeefuddin/t3bot'
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      T3CODE_TELEMETRY_CHANNEL: dev
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Checkout release source
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install build and bot dependencies
+        run: vp install --frozen-lockfile --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts... --filter=@t3tools/bot...
+
+      - name: Test bot services
+        working-directory: apps/bot
+        run: vp test run --config ../../vite.config.ts src
+
+      - name: Test executor connection
+        working-directory: apps/server
+        run: vp test run src/bot
+
+      - name: Set preview version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version=$(node -p "require('./apps/desktop/package.json').version")
+          version="${base_version}-preview.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          node scripts/update-release-package-versions.ts "$version"
+          cp .env.example .env
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+
+      - name: Build Apple Silicon desktop
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: vp run dist:desktop:artifact --platform mac --target dmg --arch arm64 --build-version "$RELEASE_VERSION" --output-dir release --verbose
+
+      - name: Collect installers and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-publish
+          cp release/*.dmg release/*.zip release-publish/
+          cd release-publish
+          shasum -a 256 *.dmg *.zip > SHA256SUMS
+
+      - name: Preserve build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: t3bot-macos-arm64
+          path: release-publish/*
+          if-no-files-found: error
+
+      - name: Publish GitHub preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/release-notes.md" <<'EOF'
+          T3 Code with t3bot: bot conversations, durable goals, memory, and connections to T3 environments.
+
+          Download the **arm64 DMG** for an Apple Silicon Mac. A ZIP and SHA-256 checksums are also attached.
+
+          This preview is unsigned and not notarized. macOS may require you to allow it in System Settings > Privacy & Security. Automatic updates are disabled for preview builds.
+
+          Connect the app to your separately running t3bot server through the bot connection settings. The desktop installer includes the bot UI and executor connection; it does not start or bundle the hosted bot server, provider credentials, or personal data.
+          EOF
+          printf '\nSource commit: `%s`\n' "$GITHUB_SHA" >> "$RUNNER_TEMP/release-notes.md"
+          gh release create "$RELEASE_TAG" release-publish/* \
+            --target "$GITHUB_SHA" \
+            --title "t3bot desktop preview — Apple Silicon" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --prerelease --latest=false
