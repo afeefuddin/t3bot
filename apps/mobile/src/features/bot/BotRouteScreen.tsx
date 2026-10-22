@@ -4,7 +4,12 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { View } from "react-native";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import * as SecureStore from "expo-secure-store";
-import { BotClient, getBotReplyActivity, type BotConnection } from "@t3tools/client-runtime/bot";
+import {
+  BotClient,
+  getBotReplyActivity,
+  resolveBotThreadTarget,
+  type BotConnection,
+} from "@t3tools/client-runtime/bot";
 import type { BotCommand, BotMemory } from "@t3tools/contracts/bot";
 import { BotAvatarDesigner, BotAvatarImage } from "./BotAvatar";
 import { CommonActions, useNavigation } from "@react-navigation/native";
@@ -12,6 +17,7 @@ import { AppText, AppTextInput } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
+import { useEnvironments } from "../../state/environments";
 
 const connectionKey = "t3bot.connection.v1";
 const emptyState = { snapshot: null, connected: false, error: null } as const;
@@ -69,6 +75,7 @@ function MemoryEditor({
 
 export function BotRouteScreen() {
   const navigation = useNavigation();
+  const { environments } = useEnvironments();
   const [client, setClient] = useState<BotClient | null>(null);
   const [tab, setTab] = useState("Chat");
   const [url, setUrl] = useState("");
@@ -490,16 +497,21 @@ export function BotRouteScreen() {
                       label="Open thread"
                       tone="text"
                       onPress={() => {
-                        const identity = snapshot.environments.find(
-                          (env) => env.id === task.environmentId,
-                        )?.identity;
-                        if (identity)
-                          navigation.dispatch(
-                            CommonActions.navigate("Thread", {
-                              environmentId: identity,
-                              threadId: task.threadId,
-                            }),
+                        try {
+                          const target = resolveBotThreadTarget(
+                            task,
+                            snapshot.environments,
+                            environments
+                              .filter((environment) => environment.connection.phase === "connected")
+                              .map((environment) => environment.environmentId),
                           );
+                          setError(null);
+                          navigation.dispatch(CommonActions.navigate("Thread", target));
+                        } catch (cause) {
+                          setError(
+                            cause instanceof Error ? cause.message : "Could not open this thread.",
+                          );
+                        }
                       }}
                     />
                   )}

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vite-plus/test";
-import { BotClient, getBotReplyActivity } from "./bot.ts";
+import { BotClient, getBotReplyActivity, resolveBotThreadTarget } from "./bot.ts";
 import type { BotSnapshot } from "@t3tools/contracts/bot";
 
 const snapshot = (cursor: number): BotSnapshot => ({
@@ -21,6 +21,38 @@ const connection = {
   url: "https://bot.example.test",
   token: "fixture-owner-token-for-client-tests",
 };
+
+it("opens a bot worker using its connected T3 identity, not its bot grant ID", () => {
+  const environments = [{ id: "bot-grant", name: "Mac worker", identity: "t3-server" }];
+  expect(
+    resolveBotThreadTarget(
+      { environmentId: "bot-grant", threadId: "worker-thread" },
+      environments,
+      ["t3-server"],
+    ),
+  ).toEqual({ environmentId: "t3-server", threadId: "worker-thread" });
+});
+
+it("keeps bot workers on the bot page when their server is absent or disconnected", () => {
+  const task = { environmentId: "bot-grant", threadId: "worker-thread" };
+  const environments = [{ id: "bot-grant", name: "Mac worker", identity: "t3-server" }];
+  for (const connectedIds of [[], ["another-server"], ["bot-grant"]]) {
+    expect(() => resolveBotThreadTarget(task, environments, connectedIds)).toThrow(
+      "Connect Mac worker in Settings > Connections to open this thread.",
+    );
+  }
+});
+
+it("explains workers whose environment identity or thread has not been received", () => {
+  const task = { environmentId: "bot-grant", threadId: "worker-thread" };
+  expect(() => resolveBotThreadTarget(task, [], [])).toThrow("not available");
+  expect(() =>
+    resolveBotThreadTarget(task, [{ id: "bot-grant", name: "Mac worker", identity: null }], []),
+  ).toThrow("not available");
+  expect(() => resolveBotThreadTarget({ ...task, threadId: null }, [], [])).toThrow(
+    "not created a thread",
+  );
+});
 it("connects with a browser transport that requires the global receiver", async (context) => {
   const browserFetch: typeof fetch = async function (this: unknown) {
     if (this !== globalThis) throw new TypeError("Illegal invocation");

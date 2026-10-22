@@ -15,6 +15,11 @@ it to the default at any time.
 
 ## Give it work
 
+t3bot acknowledges your message before processing it. It uses available tools for quick lookups and delegates larger independent work
+to internal workers. Those workers use the bot’s hosted workspace and stay out of
+your project thread lists. Repository work runs in the relevant connected project.
+Ask for an independent worker explicitly when you want one.
+
 You can also prompt t3bot by messaging its configured Slack app or Telegram bot.
 Slack supports DMs and mentions in explicitly authorized channels; Telegram
 supports private text chats. Replies and task updates return to the originating

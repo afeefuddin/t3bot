@@ -99,7 +99,7 @@ function harness(
   return {
     requests,
     layer: Model.layer.pipe(
-      Layer.provide(http),
+      Layer.provideMerge(http),
       Layer.provideMerge(config),
       Layer.provide(NodeServices.layer),
     ),
@@ -243,5 +243,122 @@ it.effect.each([
       .pipe(Effect.result);
     assert.equal(result._tag, "Failure");
     if (result._tag === "Failure") assert.equal(result.failure.category, reply.category);
+  }).pipe(Effect.provide(h.layer));
+});
+
+it.effect(
+  "uses configurable native web search and preserves search evidence across model steps",
+  () => {
+    const search = {
+      type: "web_search_call",
+      id: "search-1",
+      status: "completed",
+      action: { type: "search", query: "public information" },
+    };
+    const h = harness(
+      [
+        {
+          body: response([
+            search,
+            {
+              ...answer,
+              content: [
+                {
+                  type: "output_text",
+                  text: "Remembered.",
+                  annotations: [
+                    {
+                      type: "url_citation",
+                      url: "https://example.com/evidence",
+                      title: "Evidence",
+                      start_index: 0,
+                      end_index: 11,
+                    },
+                  ],
+                },
+              ],
+            },
+          ]),
+        },
+        { body: response([answer]) },
+      ],
+      [{ ...provider, webSearch: true }],
+    );
+    return Effect.gen(function* () {
+      const model = yield* Model.Model;
+      const first = yield* model.complete(
+        "Codex",
+        [{ role: "user", content: "Find current public information" }],
+        [tool],
+      );
+      assert.deepEqual(h.requests[0]?.body.tools, [
+        { type: "function", ...tool.function, strict: false },
+        { type: "web_search" },
+      ]);
+      assert.include(first.message.content!, "Remembered.");
+      assert.include(first.message.content!, "[Evidence](<https://example.com/evidence>)");
+      const saved = yield* decodeMessage(JSON.stringify(first.message));
+      yield* model.complete(
+        "Codex",
+        [
+          { role: "user", content: "Find current public information" },
+          saved,
+          { role: "user", content: "Explain the evidence" },
+        ],
+        [tool],
+      );
+      assert.include(JSON.stringify(h.requests[1]?.body.input), "web_search_call");
+      assert.include(JSON.stringify(h.requests[1]?.body.input), "url_citation");
+    }).pipe(Effect.provide(h.layer));
+  },
+);
+
+it.effect.each([false, true])(
+  "enables native search only when configured, even without function tools (%s)",
+  (webSearch) => {
+    const h = harness([{ body: response([answer]) }], [{ ...provider, webSearch }]);
+    return Effect.gen(function* () {
+      const model = yield* Model.Model;
+      yield* model.complete("Codex", [{ role: "user", content: "Look this up" }], []);
+      if (webSearch) assert.deepEqual(h.requests[0]?.body.tools, [{ type: "web_search" }]);
+      else assert.notProperty(h.requests[0]?.body, "tools");
+    }).pipe(Effect.provide(h.layer));
+  },
+);
+
+it.effect("deduplicates source links and ignores invalid citation URLs", () => {
+  const citation = {
+    type: "url_citation",
+    title: "Official [source]",
+    url: "https://example.com/evidence",
+  };
+  const h = harness([
+    {
+      body: response([
+        {
+          ...answer,
+          content: [
+            {
+              type: "output_text",
+              text: "Evidence.",
+              annotations: [
+                citation,
+                citation,
+                { ...citation, url: "javascript:alert(1)" },
+                { ...citation, url: "invalid url" },
+              ],
+            },
+          ],
+        },
+      ]),
+    },
+  ]);
+  return Effect.gen(function* () {
+    const model = yield* Model.Model;
+    const result = yield* model.complete("Codex", [{ role: "user", content: "Look this up" }], []);
+    const text = result.message.content ?? "";
+    assert.equal(text.split("https://example.com/evidence").length, 2);
+    assert.notInclude(text, "javascript:");
+    assert.notInclude(text, "invalid url");
   }).pipe(Effect.provide(h.layer));
 });

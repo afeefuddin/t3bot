@@ -15,6 +15,7 @@ import * as DeliveryStore from "./DeliveryStore.ts";
 import * as Connectors from "./Connectors.ts";
 import * as Coordinator from "./Coordinator.ts";
 import * as Model from "./Model.ts";
+import * as AgentSessions from "./AgentSessions.ts";
 
 const slackSecret = "fixture-slack-signing-secret";
 const telegramSecret = "fixture-telegram-webhook-secret-1234";
@@ -165,6 +166,62 @@ const answer = Effect.gen(function* () {
   yield* store.finish(job);
 });
 
+it.effect.each([
+  {
+    connectorId: "work-slack",
+    destination: { type: "slack", channel: "DCHAT", threadTs: "100.001" },
+    fail: false,
+  },
+  {
+    connectorId: "personal-telegram",
+    destination: { type: "telegram", chatId: "42", messageId: 5 },
+    fail: false,
+  },
+  {
+    connectorId: "work-slack",
+    destination: { type: "slack", channel: "DCHAT", threadTs: "100.001" },
+    fail: true,
+  },
+  {
+    connectorId: "personal-telegram",
+    destination: { type: "telegram", chatId: "42", messageId: 5 },
+    fail: true,
+  },
+] as const)(
+  "routes internal worker results back through $connectorId (failure=$fail) after recovery",
+  (test) => {
+    const h = harness();
+    return Effect.gen(function* () {
+      const agents = yield* AgentSessions.AgentSessions;
+      const deliveries = yield* DeliveryStore.DeliveryStore;
+      const store = yield* Store.Store;
+      const connectors = yield* Connectors.Connectors;
+      yield* deliveries.bind("parent", test.connectorId, test.destination);
+      yield* agents.start("child", "Investigate", "Research", "", "parent");
+      const child = yield* store.claim("background");
+      assert.ok(child);
+      if (test.fail) yield* store.finish(child, "budget");
+      else {
+        yield* agents.complete("child", "Evidence");
+        yield* store.finish(child);
+      }
+      const wake = yield* store.claim();
+      assert.equal(wake?.kind, "agent_wake");
+      yield* store.recover;
+      yield* answer;
+      yield* connectors.step;
+      assert.equal(h.sent.length, 1);
+      assert.equal(h.sent[0]?.body.text, "Here is the evidence.");
+      if (test.destination.type === "slack") {
+        assert.equal(h.sent[0]?.body.channel, test.destination.channel);
+        assert.equal(h.sent[0]?.body.thread_ts, test.destination.threadTs);
+      } else assert.equal(h.sent[0]?.body.chat_id, test.destination.chatId);
+      assert.equal(yield* connectors.step, false);
+      assert.equal((yield* store.snapshot()).tasks.length, 0);
+    }).pipe(Effect.provide(h.layer));
+  },
+);
+
 it.effect(
   "acknowledges signed Slack events durably, deduplicates retries, and replies to the originating thread",
   () => {
@@ -179,16 +236,19 @@ it.effect(
       const body = slack();
       yield* connectors.receive("work-slack", signed(body), body);
       yield* connectors.receive("work-slack", signed(body), body);
-      assert.equal((yield* store.snapshot()).messages.length, 1);
+      assert.equal((yield* store.snapshot()).messages.length, 2);
       assert.equal(h.sent.length, 0);
+      assert.equal(yield* connectors.step, true);
+      assert.equal(h.sent[0]?.body.text, "Received. I’m on it.");
+      assert.equal(yield* connectors.step, false);
       yield* answer;
       assert.equal(yield* connectors.step, true);
       assert.equal(yield* connectors.step, false);
-      assert.equal(h.sent.length, 1);
+      assert.equal(h.sent.length, 2);
       assert.equal(h.sent[0]?.url, "https://slack.com/api/chat.postMessage");
       assert.equal(h.sent[0]?.body.channel, "DCHAT");
       assert.equal(h.sent[0]?.body.thread_ts, "100.001");
-      assert.equal(h.sent[0]?.body.text, "Here is the evidence.");
+      assert.equal(h.sent[1]?.body.text, "Here is the evidence.");
     }).pipe(Effect.provide(h.layer));
   },
 );
@@ -275,9 +335,13 @@ it.effect(
       );
       yield* connectors.receive("personal-telegram", telegramHeaders, telegram());
       yield* connectors.receive("personal-telegram", telegramHeaders, telegram());
-      assert.equal((yield* store.snapshot()).messages.length, 1);
+      assert.equal((yield* store.snapshot()).messages.length, 2);
+      yield* connectors.step;
+      assert.equal(h.sent[0]?.body.text, "Received. I’m on it.");
       yield* answer;
       yield* connectors.step;
+      assert.equal(h.sent.length, 2);
+      assert.equal(h.sent[1]?.body.text, "Here is the evidence.");
       assert.equal(h.sent[0]?.body.chat_id, "42");
       assert.deepEqual(h.sent[0]?.body.reply_parameters, {
         message_id: 5,
@@ -339,7 +403,9 @@ it.effect(
       });
       yield* connectors.step;
       const snapshot = yield* store.snapshot();
-      const failed = snapshot.jobs.find((j) => j.kind === "delivery:personal-telegram");
+      const failed = snapshot.jobs.find(
+        (j) => j.kind === "delivery:personal-telegram" && j.state === "failed",
+      );
       assert.ok(failed);
       assert.equal(failed.state, "failed");
       assert.equal(failed.error, "unauthorized");
@@ -349,7 +415,10 @@ it.effect(
         (yield* store.snapshot()).connectors?.find((c) => c.id === "personal-telegram")?.failed,
         0,
       );
-      assert.equal(h.sent.length, 2);
+      yield* connectors.step;
+      assert.equal(h.sent.length, 3);
+      assert.equal(h.sent[1]?.body.text, "Received. I’m on it.");
+      assert.equal(h.sent[2]?.body.text, "Here is the evidence.");
     }).pipe(Effect.provide(h.layer));
   },
 );
@@ -458,9 +527,13 @@ it.effect("uses the selected OpenAI-compatible provider for both messaging conne
     });
     const raw = slack();
     yield* connectors.receive("work-slack", signed(raw), raw);
+    yield* connectors.step;
+    assert.equal(h.sent[0]?.body.text, "Received. I’m on it.");
     yield* answer;
     yield* connectors.step;
     yield* connectors.receive("personal-telegram", telegramHeaders, telegram());
+    yield* connectors.step;
+    assert.equal(h.sent[2]?.body.text, "Received. I’m on it.");
     yield* answer;
     yield* connectors.step;
     assert.equal(h.modelRequests.length, 2);
@@ -471,8 +544,11 @@ it.effect("uses the selected OpenAI-compatible provider for both messaging conne
       ),
     );
     assert.equal(h.sent[0]?.body.channel, "DCHAT");
-    assert.equal(h.sent[1]?.body.chat_id, "42");
-    assert.ok(h.sent.every((r) => r.body.text === "Reply from selected provider."));
+    assert.equal(h.sent[3]?.body.chat_id, "42");
+    assert.equal(h.sent.length, 4);
+    assert.ok(
+      [h.sent[1], h.sent[3]].every((r) => r?.body.text === "Reply from selected provider."),
+    );
   }).pipe(Effect.provide(h.layer));
 });
 it.effect(

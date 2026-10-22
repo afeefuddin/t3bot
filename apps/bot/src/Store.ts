@@ -1,4 +1,4 @@
-import { verificationPrompt } from "./prompts.ts";
+import { messageAcknowledgement, verificationPrompt } from "./prompts.ts";
 import * as Records from "./Records.ts";
 import * as Tasks from "./Tasks.ts";
 import * as Jobs from "./Jobs.ts";
@@ -61,8 +61,11 @@ export class Store extends Context.Service<
     ) => Effect.Effect<{ goal: BotGoal; tasks: ReadonlyArray<BotTask> }, BotError>;
     readonly changed: (after: number) => Effect.Effect<number, BotError>;
     readonly search: (query: string) => Effect.Effect<ReadonlyArray<BotMessage>, BotError>;
-    readonly claim: () => Effect.Effect<Jobs.JobRow | null, BotError>;
-    readonly finish: (job: Jobs.JobRow, error?: string) => Effect.Effect<void, BotError>;
+    readonly claim: (lane?: Jobs.JobLane) => Effect.Effect<Jobs.JobRow | null, BotError>;
+    readonly finish: (
+      job: Jobs.JobRow,
+      error?: string,
+    ) => Effect.Effect<Jobs.JobRow["state"] | null, BotError>;
     readonly tick: () => Effect.Effect<void, BotError>;
     readonly isGoalWakeCurrent: (wake: Goals.GoalWake) => Effect.Effect<boolean, BotError>;
     readonly isTaskWakeCurrent: (wake: TaskWake) => Effect.Effect<boolean, BotError>;
@@ -278,6 +281,12 @@ const make = Effect.gen(function* () {
               "turn",
               { text: input.text, messageId: input.requestId },
               now,
+              input.requestId,
+            );
+            yield* append(
+              `ack:${input.requestId}`,
+              "system",
+              messageAcknowledgement,
               input.requestId,
             );
             break;
@@ -503,7 +512,7 @@ const make = Effect.gen(function* () {
     goalContext: (id) => protect(goalContext(id)),
     changed: (after) => protect(changed(after)),
     search: (query) => protect(search(query)),
-    claim: () => protect(claim()),
+    claim: (lane) => protect(claim(lane)),
     finish: (job, error) => protect(finish(job, error)),
     tick: () => protect(tick()),
     isGoalWakeCurrent: (wake) => goals.isWakeCurrent(wake),

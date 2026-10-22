@@ -7,6 +7,7 @@ const HttpProviderConfig = Schema.Struct({
   model: Schema.String.check(Schema.isMinLength(1)),
   apiKeyEnv: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1))),
   api: Schema.optionalKey(Schema.Literals(["chat_completions", "responses"])),
+  webSearch: Schema.optionalKey(Schema.Boolean),
   reasoningEffort: Schema.optionalKey(Schema.Literals(["low", "medium", "high"])),
   maxTokensField: Schema.optionalKey(Schema.Literals(["max_tokens", "max_completion_tokens"])),
 });
@@ -16,6 +17,7 @@ export const ProviderConfig = Schema.Union([
     id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160)),
     type: Schema.Literal("codex"),
     model: Schema.String.check(Schema.isMinLength(1)),
+    webSearch: Schema.optionalKey(Schema.Boolean),
     binary: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1))),
   }),
 ]);
@@ -62,6 +64,7 @@ export class BotConfig extends Context.Service<
   {
     readonly providers: ReadonlyArray<typeof ProviderConfig.Type & { readonly apiKey: string }>;
     readonly provider: string;
+    readonly workspace?: string;
     readonly connectors?: ReadonlyArray<ConnectorConfig>;
   }
 >()("@t3tools/bot/config/BotConfig") {}

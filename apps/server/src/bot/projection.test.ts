@@ -43,7 +43,56 @@ it("reports a waiting run as input-required without claiming completion", () => 
   ).toBe("waiting_input");
 });
 
+it("reports command approvals even while the provider run still says running", () => {
+  const report = summarizeBotRun(
+    {
+      runs: [{ id: "run", status: "running", ordinal: 1, activeAttemptId: "attempt" }],
+      providerTurns: [{ id: "turn", runAttemptId: "attempt" }],
+      runtimeRequests: [{ status: "pending", kind: "command", providerTurnId: "turn" }],
+      messages: [],
+    },
+    "run",
+  );
+  expect(report.status).toBe("waiting_input");
+  expect(report.result).toContain("command approval");
+});
+
+it("explains a queued follow-up blocked behind an earlier run's approval", () => {
+  const report = summarizeBotRun(
+    {
+      runs: [
+        { id: "run", status: "running", ordinal: 1, activeAttemptId: "attempt" },
+        { id: "queued", status: "queued", ordinal: 2 },
+      ],
+      providerTurns: [{ id: "turn", runAttemptId: "attempt" }],
+      runtimeRequests: [{ status: "pending", kind: "command", providerTurnId: "turn" }],
+      messages: [],
+    },
+    "queued",
+  );
+  expect(report.runId).toBe("queued");
+  expect(report.status).toBe("waiting_input");
+  expect(report.result).toContain("Open this T3 thread");
+});
+
 const decodeItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
+it("does not let stale approvals from a finished attempt block the current run", () => {
+  const report = summarizeBotRun(
+    {
+      runs: [
+        { id: "old", status: "completed", ordinal: 1, activeAttemptId: "old-attempt" },
+        { id: "current", status: "running", ordinal: 2, activeAttemptId: "current-attempt" },
+      ],
+      providerTurns: [{ id: "old-turn", runAttemptId: "old-attempt" }],
+      runtimeRequests: [{ status: "pending", kind: "command", providerTurnId: "old-turn" }],
+      messages: [],
+    },
+    "current",
+  );
+  expect(report.status).toBe("running");
+  expect(report.result).toBe("");
+});
+
 const commandItem = (overrides: Record<string, unknown> = {}) =>
   decodeItem({
     id: "command",

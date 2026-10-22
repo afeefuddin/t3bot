@@ -1,6 +1,12 @@
 // @effect-diagnostics globalFetch:off -- Imperative client transport boundary shared by React and React Native.
 // @effect-diagnostics globalTimers:off -- This adapter owns one abortable network retry loop per connected client.
-import { BotSnapshot, BotCommand, type BotMessage } from "@t3tools/contracts/bot";
+import {
+  BotSnapshot,
+  BotCommand,
+  type BotMessage,
+  type BotEnvironment,
+  type BotTask,
+} from "@t3tools/contracts/bot";
 import * as Schema from "effect/Schema";
 
 export interface BotConnection {
@@ -14,6 +20,20 @@ export interface BotClientState {
 }
 const decodeSnapshot = Schema.decodeUnknownSync(BotSnapshot);
 const decodeCommand = Schema.decodeUnknownSync(BotCommand);
+
+export function resolveBotThreadTarget(
+  task: Pick<BotTask, "environmentId" | "threadId">,
+  environments: ReadonlyArray<Pick<BotEnvironment, "id" | "name" | "identity">>,
+  connectedEnvironmentIds: ReadonlyArray<string>,
+) {
+  if (!task.threadId) throw new Error("This task has not created a thread yet.");
+  const environment = environments.find((entry) => entry.id === task.environmentId);
+  if (!environment?.identity) throw new Error("This task's T3 environment is not available yet.");
+  // The bot's worker connection does not also pair that server with this client.
+  if (!connectedEnvironmentIds.includes(environment.identity))
+    throw new Error(`Connect ${environment.name} in Settings > Connections to open this thread.`);
+  return { environmentId: environment.identity, threadId: task.threadId };
+}
 
 export function normalizeBotConnection(connection: BotConnection): BotConnection {
   const url = new URL(connection.url);

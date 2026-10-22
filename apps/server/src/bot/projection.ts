@@ -9,6 +9,16 @@ export function summarizeBotRun(
       readonly id: string;
       readonly status: OrchestrationV2RunStatus;
       readonly ordinal: number;
+      readonly activeAttemptId?: string | null;
+    }>;
+    readonly providerTurns?: ReadonlyArray<{
+      readonly id: string;
+      readonly runAttemptId: string | null;
+    }>;
+    readonly runtimeRequests?: ReadonlyArray<{
+      readonly status: string;
+      readonly kind: string;
+      readonly providerTurnId: string | null;
     }>;
     readonly messages: ReadonlyArray<{
       readonly role: string;
@@ -42,11 +52,41 @@ export function summarizeBotRun(
       status = "cancelled";
       break;
   }
-  const result = projection.messages
+  let result = projection.messages
     .filter((m) => m.role === "assistant" && m.runId === run?.id && !m.streaming)
     .map((m) => m.text)
     .join("\n")
     .slice(-32000);
+  const blockingAttempts = new Set(
+    projection.runs
+      .filter(
+        (candidate) =>
+          candidate.id === run?.id || (run?.status === "queued" && candidate.ordinal < run.ordinal),
+      )
+      .filter((candidate) => ["running", "starting", "waiting"].includes(candidate.status))
+      .flatMap((candidate) => (candidate.activeAttemptId ? [candidate.activeAttemptId] : [])),
+  );
+  const blockingTurns = new Set(
+    (projection.providerTurns ?? [])
+      .filter((turn) => turn.runAttemptId !== null && blockingAttempts.has(turn.runAttemptId))
+      .map((turn) => turn.id),
+  );
+  const pending = projection.runtimeRequests?.find(
+    (request) =>
+      request.status === "pending" &&
+      request.providerTurnId !== null &&
+      blockingTurns.has(request.providerTurnId),
+  );
+  if (pending) {
+    status = "waiting_input";
+    const reason =
+      pending.kind === "command"
+        ? "command approval"
+        : pending.kind === "user_input"
+          ? "user input"
+          : "provider approval or authentication";
+    result = `Waiting for ${reason}. Open this T3 thread to respond; sending a follow-up cannot approve the request.${result ? `\n${result}` : ""}`;
+  }
   const checks =
     run && collectChecks && status === "completed"
       ? (projection.turnItems ?? [])

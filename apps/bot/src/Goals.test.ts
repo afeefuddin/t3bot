@@ -5,10 +5,12 @@ import type { BotCommand, BotGoal, BotVerificationCheck } from "@t3tools/contrac
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as TestClock from "effect/testing/TestClock";
 import { BotConfig } from "./config.ts";
 import * as Database from "./database.ts";
 import * as Store from "./Store.ts";
+import * as AgentSessions from "./AgentSessions.ts";
 import { toolRunner } from "./tools.ts";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -18,7 +20,11 @@ const config = Layer.succeed(BotConfig, {
   providers: [{ id: "test", endpoint: "http://localhost", model: "test", apiKey: "" }],
 });
 const layer = (filename = ":memory:") =>
-  Store.layer.pipe(Layer.provideMerge(Database.layer(filename)), Layer.provide(config));
+  AgentSessions.layer.pipe(
+    Layer.provideMerge(Layer.merge(Store.layer, FetchHttpClient.layer)),
+    Layer.provideMerge(Database.layer(filename)),
+    Layer.provide(config),
+  );
 const goalInput = {
   type: "goal.create",
   requestId: "create",

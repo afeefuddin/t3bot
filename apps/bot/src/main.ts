@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Processes from "./Processes.ts";
 import * as Worker from "./Worker.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- CLI and HTTP framework boundary.
 import * as NodeHttp from "node:http";
@@ -100,12 +101,14 @@ const configLayer = Layer.succeed(
       ...p,
       apiKey: "apiKeyEnv" in p && p.apiKeyEnv ? process.env[p.apiKeyEnv]! : "",
     })),
+    workspace: NodePath.join(home, "workspace"),
     provider: config.provider,
     connectors,
   }),
 );
 const services = Layer.merge(Worker.layer, Connectors.layer).pipe(
   Layer.provideMerge(Coordinator.layer),
+  Layer.provideMerge(Processes.layer),
   Layer.provideMerge(Store.layer),
   Layer.provideMerge(Model.layer),
   Layer.provideMerge(Database.layer(NodePath.join(home, "bot.sqlite"))),
@@ -123,6 +126,8 @@ const store = await runtime.runPromise(Store.Store);
 const worker = await runtime.runPromise(Worker.Worker);
 const connectorService = await runtime.runPromise(Connectors.Connectors);
 await run(store.recover);
+const processes = await runtime.runPromise(Processes.Processes);
+await run(processes.recover);
 let stopping = false;
 runtime.runFork(worker.run);
 if (connectors.length) runtime.runFork(connectorService.run);

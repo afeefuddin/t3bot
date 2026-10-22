@@ -4,7 +4,11 @@ import { observeResize } from "~/lib/observeResize";
 import { randomUUID } from "~/lib/utils";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
-import { BotClient, getBotReplyActivity } from "@t3tools/client-runtime/bot";
+import {
+  BotClient,
+  getBotReplyActivity,
+  resolveBotThreadTarget,
+} from "@t3tools/client-runtime/bot";
 import type { BotCommand, BotMemory, BotResponsibility } from "@t3tools/contracts/bot";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -12,6 +16,7 @@ import { Textarea } from "~/components/ui/textarea";
 import { SendIcon, SettingsIcon, ListTodoIcon, BrainIcon, ArrowDownIcon } from "lucide-react";
 import { BotComposer, BotMessageRow, BotReplyProgress } from "./BotConversation";
 import { BotAvatarDesigner, BotAvatarImage } from "./BotAvatar";
+import { useConnectedEnvironmentIds } from "~/state/environments";
 
 const savedKey = "t3bot.connection.v1";
 const requestId = randomUUID;
@@ -135,6 +140,7 @@ function ResponsibilityRow({
 
 export function BotPage() {
   const navigate = useNavigate();
+  const connectedEnvironmentIds = useConnectedEnvironmentIds();
   const pendingMessage = useRef<{ text: string; id: string } | null>(null);
   const [client, setClient] = useState<BotClient | null>(() => {
     try {
@@ -171,6 +177,19 @@ export function BotPage() {
     client?.getSnapshot ?? (() => emptyState),
   );
   const snapshot = state.snapshot;
+  const openThread = (threadId: string, environmentId: string) => {
+    try {
+      const params = resolveBotThreadTarget(
+        { threadId, environmentId },
+        snapshot?.environments ?? [],
+        connectedEnvironmentIds,
+      );
+      setError(null);
+      void navigate({ to: "/$environmentId/$threadId", params });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not open this thread.");
+    }
+  };
   const lastSeq = snapshot?.messages.at(-1)?.seq;
   const replyActivity = getBotReplyActivity(snapshot?.jobs ?? []);
   const readThrough = snapshot?.readThrough ?? 0;
@@ -601,16 +620,7 @@ export function BotPage() {
                   goal={goal}
                   tasks={snapshot.tasks}
                   run={run}
-                  openThread={(threadId, environmentId) => {
-                    const identity = snapshot.environments.find(
-                      (e) => e.id === environmentId,
-                    )?.identity;
-                    if (identity)
-                      void navigate({
-                        to: "/$environmentId/$threadId",
-                        params: { environmentId: identity, threadId },
-                      });
-                  }}
+                  openThread={openThread}
                 />
               ))}
               <h2 className="pt-3 font-medium">Responsibilities</h2>
@@ -644,14 +654,7 @@ export function BotPage() {
                         size="sm"
                         variant="outline"
                         onClick={() => {
-                          const identity = snapshot.environments.find(
-                            (e) => e.id === task.environmentId,
-                          )?.identity;
-                          if (identity && task.threadId)
-                            void navigate({
-                              to: "/$environmentId/$threadId",
-                              params: { environmentId: identity, threadId: task.threadId },
-                            });
+                          if (task.threadId) openThread(task.threadId, task.environmentId);
                         }}
                       >
                         Open thread

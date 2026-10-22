@@ -26,12 +26,19 @@ export const JobRow = Schema.Struct({
   error: Schema.NullOr(Schema.String),
 });
 export type JobRow = typeof JobRow.Type;
+export type JobLane = "coordinator" | "background";
+const decodeAgentJob = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Struct({ agentId: Schema.String })),
+);
 
 export class Jobs extends Context.Service<
   Jobs,
   {
-    readonly claim: () => Effect.Effect<JobRow | null, BotError>;
-    readonly finish: (job: JobRow, error?: string) => Effect.Effect<void, BotError>;
+    readonly claim: (lane?: JobLane) => Effect.Effect<JobRow | null, BotError>;
+    readonly finish: (
+      job: JobRow,
+      error?: string,
+    ) => Effect.Effect<JobRow["state"] | null, BotError>;
     readonly tick: () => Effect.Effect<void, BotError>;
     readonly recover: Effect.Effect<void, BotError>;
     readonly fireResponsibility: (
@@ -64,12 +71,12 @@ const make = Effect.gen(function* () {
       r.id,
     );
   });
-  const claim = Effect.fn("BotJobs.claim")(function* () {
+  const claim = Effect.fn("BotJobs.claim")(function* (lane: JobLane = "coordinator") {
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const rows =
-          yield* sql<JobRow>`UPDATE jobs SET state='running',attempts=attempts+1,generation=generation+1,lease_until=${now + 180000} WHERE id=(SELECT id FROM jobs WHERE ((state='pending' AND due_at<=${now}) OR (state='running' AND lease_until<${now})) AND NOT EXISTS(SELECT 1 FROM jobs active WHERE active.state='running' AND active.lease_until>=${now}) ORDER BY CASE WHEN kind='turn' AND json_extract(data,'$.messageId') IS NOT NULL THEN 0 WHEN kind='turn' THEN 1 WHEN kind='responsibility' THEN 2 ELSE 3 END,due_at,id LIMIT 1) RETURNING *`;
+          yield* sql<JobRow>`UPDATE jobs SET state='running',attempts=attempts+1,generation=generation+1,lease_until=${now + 180000} WHERE id=(SELECT id FROM jobs WHERE ((state='pending' AND due_at<=${now}) OR (state='running' AND lease_until<${now})) AND (CASE WHEN ${lane}='background' THEN kind IN ('agent','summary','memory_review') ELSE kind NOT IN ('agent','summary','memory_review') END) AND (SELECT COUNT(*) FROM jobs active WHERE active.state='running' AND active.lease_until>=${now} AND (CASE WHEN ${lane}='background' THEN active.kind IN ('agent','summary','memory_review') ELSE active.kind NOT IN ('agent','summary','memory_review') END)) < ${lane === "background" ? 2 : 1} ORDER BY CASE WHEN kind='turn' AND json_extract(data,'$.messageId') IS NOT NULL THEN 0 WHEN kind='turn' THEN 1 WHEN kind='responsibility' THEN 2 WHEN kind='agent' THEN 3 WHEN kind='memory_review' THEN 4 WHEN kind='summary' THEN 5 ELSE 3 END,due_at,id LIMIT 1) RETURNING *`;
         if (rows.length) yield* event("jobs", now);
         return rows[0] ?? null;
       }),
@@ -77,7 +84,7 @@ const make = Effect.gen(function* () {
   });
   const finish = Effect.fn("BotJobs.finish")(function* (job: JobRow, error?: string) {
     const now = yield* Clock.currentTimeMillis;
-    yield* sql.withTransaction(
+    return yield* sql.withTransaction(
       Effect.gen(function* () {
         const state = error
           ? ["budget", "invalid", "unauthorized", "conflict"].includes(error) || job.attempts >= 4
@@ -87,7 +94,20 @@ const make = Effect.gen(function* () {
         const rows = yield* sql<{
           id: string;
         }>`UPDATE jobs SET state=${state},error=${error ?? null},lease_until=NULL,due_at=${now + Math.min(60000, 2000 * 2 ** job.attempts)} WHERE id=${job.id} AND generation=${job.generation} AND state='running' RETURNING id`;
-        if (rows.length && state === "failed")
+        if (!rows.length) return null;
+        if (state === "failed" && job.kind === "agent") {
+          const { agentId } = yield* decodeAgentJob(job.data);
+          yield* enqueue(
+            `agent-failure:${job.id}:${job.generation}`,
+            "agent_wake",
+            {
+              agentId,
+              text: `Internal worker ${agentId} failed (${error}). Inspect its persisted status and any process receipts before deciding whether to retry or report the blocker. A failed worker has not completed its task.`,
+            },
+            now,
+            job.id,
+          );
+        } else if (state === "failed")
           yield* append(
             `failure:${job.id}:${job.generation}`,
             "system",
@@ -95,6 +115,7 @@ const make = Effect.gen(function* () {
             job.id,
           );
         yield* event("jobs", now);
+        return state;
       }),
     );
   });
@@ -144,7 +165,7 @@ const make = Effect.gen(function* () {
       ),
     );
   return Jobs.of({
-    claim: () => protect(claim()),
+    claim: (lane) => protect(claim(lane)),
     finish: (job, error) => protect(finish(job, error)),
     tick: () => protect(tick()),
     recover: protect(recover),

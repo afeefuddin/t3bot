@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import type { BotSnapshot } from "@t3tools/contracts/bot";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as TestClock from "effect/testing/TestClock";
 import { BotConfig, type BotError } from "./config.ts";
 import * as Coordinator from "./Coordinator.ts";
@@ -127,6 +128,7 @@ it.effect(
       Layer.provideMerge(Coordinator.layer),
       Layer.provideMerge(Store.layer),
       Layer.provide(model),
+      Layer.provide(FetchHttpClient.layer),
       Layer.provideMerge(Database.layer(":memory:")),
       Layer.provide(config),
     );

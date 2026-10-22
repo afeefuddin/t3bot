@@ -7,10 +7,20 @@ import { BotError, type ProviderConfig } from "./config.ts";
 
 type HttpProvider = Extract<ProviderConfig, { endpoint: string }>;
 const Text = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("output_text"), text: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("output_text"),
+    text: Schema.String,
+    annotations: Schema.optional(Schema.Array(Schema.Record(Schema.String, Schema.Unknown))),
+  }),
   Schema.Struct({ type: Schema.Literal("refusal"), refusal: Schema.String }),
 ]);
 const Item = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("web_search_call"),
+    id: Schema.optional(Schema.String),
+    status: Schema.optional(Schema.String),
+    action: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
   Schema.Struct({
     type: Schema.Literal("reasoning"),
     encrypted_content: Schema.optional(Schema.String),
@@ -78,9 +88,12 @@ export function responsesRequest(
     include: ["reasoning.encrypted_content"],
     max_output_tokens: 4096,
     ...(provider.reasoningEffort ? { reasoning: { effort: provider.reasoningEffort } } : {}),
-    ...(tools.length
+    ...(tools.length || provider.webSearch
       ? {
-          tools: tools.map((tool) => ({ type: "function", ...tool.function, strict: false })),
+          tools: [
+            ...tools.map((tool) => ({ type: "function", ...tool.function, strict: false })),
+            ...(provider.webSearch ? [{ type: "web_search" }] : []),
+          ],
           parallel_tool_calls: false,
         }
       : {}),
@@ -107,13 +120,32 @@ export const responsesResult = Effect.fn(function* (
     calls.some((call) => !tools.some((tool) => tool.function.name === call.name))
   )
     return yield* new BotError({ category: "invalid" });
-  const content = response.output
+  let content = response.output
     .flatMap((item) =>
       item.type === "message"
         ? item.content.map((part) => (part.type === "output_text" ? part.text : part.refusal))
         : [],
     )
     .join("\n");
+  const citations = new Map<string, string>();
+  for (const item of response.output) {
+    if (item.type !== "message") continue;
+    for (const part of item.content) {
+      if (part.type !== "output_text") continue;
+      for (const annotation of part.annotations ?? []) {
+        if (annotation.type !== "url_citation" || typeof annotation.url !== "string") continue;
+        const url = URL.parse(annotation.url);
+        if (!url || !["http:", "https:"].includes(url.protocol) || content.includes(url.href))
+          continue;
+        const title = typeof annotation.title === "string" ? annotation.title : url.hostname;
+        citations.set(
+          url.href,
+          `[${title.replace(/[[\]\r\n]/g, " ")}](<${url.href.replace(/>/g, "%3E")}>)`,
+        );
+      }
+    }
+  }
+  if (citations.size) content += `\n\nSources: ${[...citations.values()].join(" · ")}`;
   if (!content && !calls.length) return yield* new BotError({ category: "invalid" });
   // Stateless replay carries encrypted reasoning, never references to server-stored item IDs.
   const output = response.output.filter(

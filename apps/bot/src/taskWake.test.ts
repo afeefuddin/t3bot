@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import { BotBridgePoll, type BotBridgeReport, type BotChatMessage } from "@t3tools/contracts/bot";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -149,7 +150,11 @@ it.effect(
           }),
       }),
     );
-    const layer = Coordinator.layer.pipe(Layer.provide(model), Layer.provideMerge(storeLayer));
+    const layer = Coordinator.layer.pipe(
+      Layer.provide(model),
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provideMerge(storeLayer),
+    );
     return Effect.gen(function* () {
       const store = yield* Store.Store;
       const coordinator = yield* Coordinator.Coordinator;
@@ -481,7 +486,11 @@ it.effect.each(["silent", "followup", "stale"])(
         });
       }),
     );
-    const layer = Coordinator.layer.pipe(Layer.provide(model), Layer.provideMerge(storeLayer));
+    const layer = Coordinator.layer.pipe(
+      Layer.provide(model),
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provideMerge(storeLayer),
+    );
     return Effect.gen(function* () {
       yield* setup;
       const store = yield* Store.Store;

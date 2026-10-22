@@ -42,6 +42,7 @@ const codexStep = Effect.fn("bot/codexStep")(function* (
   cwd: string,
   messages: ReadonlyArray<BotChatMessage>,
   tools: ReadonlyArray<BotTool>,
+  webSearch = false,
 ) {
   const client = yield* CodexClient.CodexAppServerClient;
   const done = yield* Deferred.make<void, BotError>();
@@ -88,7 +89,7 @@ const codexStep = Effect.fn("bot/codexStep")(function* (
       "features.browser_use": false,
       "features.computer_use": false,
       "features.skill_search": false,
-      web_search: "disabled",
+      web_search: webSearch ? "live" : "disabled",
     },
   });
   yield* client.request("turn/start", {
@@ -139,7 +140,7 @@ export const completeCodex = Effect.fn("bot/completeCodex")(
         { cwd },
       ),
     );
-    return yield* codexStep(provider.model, cwd, messages, tools).pipe(
+    return yield* codexStep(provider.model, cwd, messages, tools, provider.webSearch).pipe(
       Effect.provide(CodexClient.layerChildProcess(handle)),
       Effect.raceFirst(
         handle.exitCode.pipe(

@@ -13,17 +13,24 @@ import * as Model from "./Model.ts";
 import * as Store from "./Store.ts";
 import { GoalWake } from "./Goals.ts";
 import { TaskWake } from "./taskWake.ts";
-import { toolRunner, silentTool, tools } from "./tools.ts";
+import { toolRunner, silentTool, tools, internalTools } from "./tools.ts";
 import {
   coordinatorContext,
+  internalAgentPrompt,
   historicalSummary,
   memoryReviewInput,
+  messageAcknowledgement,
   summaryInput,
   summaryPrompt,
   timestampedUserMessage,
 } from "./prompts.ts";
 
+import * as AgentSessions from "./AgentSessions.ts";
+import * as Processes from "./Processes.ts";
+import * as Option from "effect/Option";
+
 const Payload = Schema.Struct({
+  agentId: Schema.optional(Schema.String),
   text: Schema.String,
   messageId: Schema.optional(Schema.String),
   responsibilityId: Schema.optional(Schema.String),
@@ -60,25 +67,33 @@ const make = Effect.gen(function* () {
   const store = yield* Store.Store;
   const model = yield* Model.Model;
   const invokeTool = yield* toolRunner;
-  const checkLease = (job: Jobs.JobRow) =>
-    Effect.gen(function* () {
-      const rows =
-        yield* sql`SELECT id FROM jobs WHERE id=${job.id} AND generation=${job.generation} AND state='running'`;
-      if (!rows.length) return yield* new BotError({ category: "conflict" });
-    });
-  const checkResponsibility = (payload: typeof Payload.Type) =>
-    Effect.gen(function* () {
-      if (!payload.responsibilityId) return true;
-      const rows = yield* sql<{
-        data: string;
-      }>`SELECT data FROM records WHERE kind='responsibility' AND id=${payload.responsibilityId}`;
-      if (!rows[0]) return false;
-      const r = yield* decodeResponsibility(rows[0].data);
-      return r.state === "active" && r.revision === payload.revision;
-    });
+  const agents = yield* AgentSessions.AgentSessions;
+  const processes = yield* Effect.serviceOption(Processes.Processes);
+  const checkLease = Effect.fn("BotCoordinator.checkLease")(function* (job: Jobs.JobRow) {
+    const rows =
+      yield* sql`SELECT id FROM jobs WHERE id=${job.id} AND generation=${job.generation} AND state='running'`;
+    if (!rows.length) return yield* new BotError({ category: "conflict" });
+  });
+  const checkResponsibility = Effect.fn("BotCoordinator.checkResponsibility")(function* (
+    payload: typeof Payload.Type,
+  ) {
+    if (!payload.responsibilityId) return true;
+    const rows = yield* sql<{
+      data: string;
+    }>`SELECT data FROM records WHERE kind='responsibility' AND id=${payload.responsibilityId}`;
+    if (!rows[0]) return false;
+    const r = yield* decodeResponsibility(rows[0].data);
+    return r.state === "active" && r.revision === payload.revision;
+  });
   const run = Effect.fn("BotCoordinator.run")(function* (job: Jobs.JobRow) {
     const payload = yield* decodePayload(job.data);
     const active = Effect.gen(function* () {
+      if (
+        ["agent", "agent_wake"].includes(job.kind) &&
+        payload.agentId &&
+        (yield* agents.get(payload.agentId)).cancelled
+      )
+        return false;
       return (
         (yield* checkResponsibility(payload)) &&
         (!payload.wake || (yield* store.isTaskWakeCurrent(payload.wake))) &&
@@ -100,6 +115,12 @@ const make = Effect.gen(function* () {
       return true;
     }
     const snapshot = yield* store.snapshot();
+    const internal =
+      job.kind === "agent" && payload.agentId ? yield* agents.get(payload.agentId) : null;
+    const systemPrompt = (now: number) =>
+      internal
+        ? internalAgentPrompt(internal, now)
+        : coordinatorContext(snapshot, now, payload.goalWake?.goalId);
     if (job.kind === "memory_review" && !snapshot.autoMemory) return true;
     if (job.kind === "summary") {
       const epochRows = yield* sql<{
@@ -154,10 +175,8 @@ const make = Effect.gen(function* () {
         data: string;
       }>`SELECT data FROM records WHERE kind='summary' AND id='main'`;
       const summary = summaries[0] ? yield* decodeSummary(summaries[0].data) : null;
-      const messages: Array<BotChatMessage> = [
-        { role: "system", content: coordinatorContext(snapshot, now, payload.goalWake?.goalId) },
-      ];
-      if (summary)
+      const messages: Array<BotChatMessage> = [{ role: "system", content: systemPrompt(now) }];
+      if (summary && !internal)
         messages.push({
           role: "system",
           content: historicalSummary(summary.text),
@@ -172,7 +191,7 @@ const make = Effect.gen(function* () {
         seq: number;
         role: "user" | "assistant" | "system";
         text: string;
-      }>`SELECT seq,role,text FROM messages WHERE seq <= ${sources[0]?.seq ?? Number.MAX_SAFE_INTEGER} AND seq > ${summary?.through ?? 0} ORDER BY seq DESC LIMIT 35`;
+      }>`SELECT seq,role,text FROM messages WHERE seq <= ${sources[0]?.seq ?? Number.MAX_SAFE_INTEGER} AND seq > ${summary?.through ?? 0} AND NOT (role='system' AND text=${messageAcknowledgement}) ORDER BY seq DESC LIMIT 35`;
       let remaining = 36000;
       const recent: Array<BotChatMessage> = [];
       for (const message of history) {
@@ -185,7 +204,7 @@ const make = Effect.gen(function* () {
         recent.push({ role: message.role === "system" ? "user" : message.role, content });
         remaining -= content.length;
       }
-      messages.push(...recent.toReversed());
+      if (!internal) messages.push(...recent.toReversed());
       if (!payload.messageId || job.kind === "memory_review")
         messages.push({ role: "user", content: payload.text });
       row = { messages: serialize(messages), step: 0, tokens: 0 };
@@ -214,15 +233,17 @@ const make = Effect.gen(function* () {
           index === 0 && message.role === "system"
             ? {
                 ...message,
-                content: coordinatorContext(snapshot, currentTime, payload.goalWake?.goalId),
+                content: systemPrompt(currentTime),
               }
             : message,
         ),
-        job.kind === "memory_review"
-          ? tools.filter((t) => t.function.name === "remember")
-          : ["task_wake", "goal_wake"].includes(job.kind)
-            ? [...tools, silentTool]
-            : tools,
+        internal
+          ? internalTools
+          : job.kind === "memory_review"
+            ? tools.filter((t) => t.function.name === "remember")
+            : ["task_wake", "goal_wake", "agent_wake", "process_wake"].includes(job.kind)
+              ? [...tools, silentTool]
+              : tools,
       );
       yield* sql.withTransaction(
         Effect.gen(function* () {
@@ -236,10 +257,18 @@ const make = Effect.gen(function* () {
       false;
     if (
       silent &&
-      (!["task_wake", "goal_wake"].includes(job.kind) || response.message.tool_calls?.length !== 1)
+      (!["task_wake", "goal_wake", "agent_wake", "process_wake"].includes(job.kind) ||
+        response.message.tool_calls?.length !== 1)
     )
       return yield* new BotError({ category: "invalid" });
     const next = [...turn.messages, response.message];
+    if (
+      internal &&
+      response.message.tool_calls?.some(
+        (call) => !internalTools.some((tool) => tool.function.name === call.function.name),
+      )
+    )
+      return yield* new BotError({ category: "unauthorized" });
     for (const [index, call] of (response.message.tool_calls ?? []).entries()) {
       yield* checkLease(job);
       if (!(yield* active)) return true;
@@ -250,6 +279,7 @@ const make = Effect.gen(function* () {
         job,
         requestId,
         messageId: payload.messageId,
+        agentId: payload.agentId,
         responsibilityId: payload.responsibilityId,
         goalId: payload.goalWake?.goalId,
         commit: (decoded) =>
@@ -282,11 +312,13 @@ const make = Effect.gen(function* () {
     }
     if (!(yield* active)) return true;
     const done = silent || !response.message.tool_calls?.length;
+    if (done && internal && Option.isSome(processes)) yield* processes.value.cancelOwner(job.id);
     yield* sql.withTransaction(
       Effect.gen(function* () {
         yield* checkLease(job);
         if (!(yield* active)) return;
-        if (done && !silent && job.kind !== "memory_review")
+        if (done && internal) yield* agents.complete(internal.id, response.message.content ?? "");
+        if (done && !silent && job.kind !== "memory_review" && !internal)
           yield* store.append(
             `answer:${job.id}`,
             "assistant",
@@ -348,4 +380,4 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(Coordinator, make);
+export const layer = Layer.effect(Coordinator, make).pipe(Layer.provideMerge(AgentSessions.layer));

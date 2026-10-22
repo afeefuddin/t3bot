@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import { BotConfig } from "./config.ts";
 import * as Database from "./database.ts";
@@ -65,6 +66,7 @@ it.effect(
     const layer = Coordinator.layer.pipe(
       Layer.provideMerge(Store.layer),
       Layer.provide(model),
+      Layer.provide(FetchHttpClient.layer),
       Layer.provideMerge(Database.layer(":memory:")),
       Layer.provide(config),
     );

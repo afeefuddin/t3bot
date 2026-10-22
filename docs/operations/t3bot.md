@@ -1,8 +1,8 @@
 # Run t3bot
 
 t3bot is a private, single-owner hosted assistant. `apps/bot` owns conversations,
-memory, responsibilities, and durable jobs. A separate T3 server runs its hosted
-tasks; other explicitly paired T3 servers can run local tasks. The existing T3
+memory, responsibilities, and durable jobs. The bot runs general tools and internal
+workers in its own hosted workspace. Paired T3 servers execute project tasks. The existing T3
 clients provide the interface.
 
 ## Local development
@@ -16,7 +16,9 @@ optional `reasoningEffort` is `low`, `medium`, or `high`; omit it for a model
 that does not support it. t3bot calls the model directly and owns the tool loop,
 memory, task dispatch, and background jobs. It saves tool decisions and opaque
 reasoning continuation data locally so work can resume after a restart without
-depending on a provider-hosted conversation. Responses requests use `store: false`.
+depending on a provider-hosted conversation. Responses requests use `store: false`. Set `webSearch: true` on a Responses
+provider that supports native web search (or the Codex CLI adapter) to enable
+general live lookups; leave it off for endpoints without that capability.
 
 Other OpenAI-compatible providers can use `api: "chat_completions"` (the default
 when `api` is omitted) with a complete `/v1/chat/completions` URL and a model
@@ -66,6 +68,21 @@ The web/desktop sidebar and command palette open t3bot. Configure its reachable
 URL and owner credential. For remote clients use HTTPS through a reverse proxy;
 do not use a cloud machine's loopback URL. Bot chat remains available independently
 of a laptop execution server.
+
+## Internal execution
+
+Internal workers have separate persisted conversations and do not require a T3
+project or executor. General shell tools run unattended as the bot’s operating-system
+user under `<T3BOT_HOME>/workspace`. Child workers receive only their explicit task
+and supplied context. Their remaining processes stop when the worker finishes.
+The main conversation can start its own background processes and receive completion
+updates while it remains available.
+
+Worker model steps and completed results survive restarts. A shell operation that
+was running during a crash has an unknown outcome and is not automatically rerun;
+the bot must inspect its effects first. Completed process receipts retain bounded
+output. Project workers use their paired executor’s configured execution ceiling;
+select **Full access** for unattended project execution.
 
 ## Pair an executor
 
