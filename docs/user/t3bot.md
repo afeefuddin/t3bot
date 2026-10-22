@@ -15,9 +15,11 @@ it to the default at any time.
 
 ## Give it work
 
-t3bot acknowledges your message before processing it. It uses available tools for quick lookups and delegates larger independent work
+t3bot acknowledges receipt before processing your request. It can send a short update before a lookup and deliver the answer separately. Clear reminders can be set quietly after the acknowledgement; the reminder arrives when due. The acknowledgement confirms receipt, not completion, and failures are reported.
+
+It uses available tools for quick lookups and delegates larger independent work
 to internal workers. Those workers use the bot’s hosted workspace and stay out of
-your project thread lists. Repository work runs in the relevant connected project.
+your project thread lists. Project-related work runs in the relevant connected project and appears in its thread list, including when it runs in the background. Connecting a machine or VM does not assign unrelated tasks to its projects.
 Ask for an independent worker explicitly when you want one.
 
 You can also prompt t3bot by messaging its configured Slack app or Telegram bot.

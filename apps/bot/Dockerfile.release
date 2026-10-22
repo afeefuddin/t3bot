@@ -1,0 +1,13 @@
+FROM node:24.13.1-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
+ARG COORDINATOR_PACKAGE=@openai/codex@0.163.0
+RUN npm install --global "$COORDINATOR_PACKAGE"
+WORKDIR /opt/t3bot
+COPY --chown=node:node runtime/ ./
+ARG T3BOT_RELEASE
+LABEL io.t3bot.release=$T3BOT_RELEASE
+ENV T3BOT_RELEASE=$T3BOT_RELEASE T3BOT_HOME=/data/bot T3BOT_HOST=0.0.0.0 T3BOT_PORT=3780
+RUN mkdir -p /data/bot && chown node:node /data/bot
+USER node
+EXPOSE 3780
+CMD ["node", "main.mjs"]

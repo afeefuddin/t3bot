@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "vp pack",
     "dev": "node --watch src/main.ts",
     "start": "node src/main.ts",
     "typecheck": "tsc-rs --noEmit",

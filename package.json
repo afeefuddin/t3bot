@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "bot:update": "node scripts/bot-update.ts",
+    "bot:rollback": "node scripts/bot-update.ts --rollback",
     "prepare": "effect-tsgo patch && vp config --no-agent",
     "dev": "node scripts/dev-runner.ts dev",
     "dev:share": "node scripts/dev-runner.ts dev --share",

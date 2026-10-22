@@ -55,7 +55,11 @@ interface Reply {
   body: unknown;
   headers?: Record<string, string>;
 }
-function harness(responses: Reply[] = [], realModel = false) {
+function harness(
+  responses: Reply[] = [],
+  realModel = false,
+  modelOverride?: Model.Model["Service"],
+) {
   const modelRequests: Array<{ model: unknown; authorization: string | undefined }> = [];
   const sent: Array<{
     url: string;
@@ -136,18 +140,20 @@ function harness(responses: Reply[] = [], realModel = false) {
       ],
     }),
   );
-  const model = realModel
-    ? Model.layer
-    : Layer.succeed(
-        Model.Model,
-        Model.Model.of({
-          complete: () =>
-            Effect.succeed({
-              message: { role: "assistant", content: "Here is the evidence." },
-              tokens: 50,
-            }),
-        }),
-      );
+  const model = modelOverride
+    ? Layer.succeed(Model.Model, modelOverride)
+    : realModel
+      ? Model.layer
+      : Layer.succeed(
+          Model.Model,
+          Model.Model.of({
+            complete: () =>
+              Effect.succeed({
+                message: { role: "assistant", content: "Here is the evidence." },
+                tokens: 50,
+              }),
+          }),
+        );
   const layer = Layer.merge(Connectors.layer, Coordinator.layer).pipe(
     Layer.provideMerge(Store.layer),
     Layer.provide(model.pipe(Layer.provide(NodeServices.layer))),
@@ -165,6 +171,72 @@ const answer = Effect.gen(function* () {
   assert.equal(yield* coordinator.run(job), true);
   yield* store.finish(job);
 });
+
+it.effect.each(["work-slack", "personal-telegram"] as const)(
+  "delivers acknowledgement, progress, and answer in order through %s across recovery",
+  (id) => {
+    let calls = 0;
+    const h = harness(
+      [],
+      false,
+      Model.Model.of({
+        complete: () =>
+          Effect.sync(() => ({
+            tokens: 10,
+            message:
+              ++calls === 1
+                ? {
+                    role: "assistant" as const,
+                    content: "Checking saved context.",
+                    tool_calls: [
+                      {
+                        id: "search",
+                        type: "function" as const,
+                        function: { name: "search_history", arguments: '{"query":"Research"}' },
+                      },
+                    ],
+                  }
+                : { role: "assistant" as const, content: "Here is the saved context." },
+          })),
+      }),
+    );
+    return Effect.gen(function* () {
+      const connectors = yield* Connectors.Connectors;
+      const coordinator = yield* Coordinator.Coordinator;
+      const store = yield* Store.Store;
+      const body = id === "work-slack" ? slack() : telegram();
+      yield* connectors.receive(id, id === "work-slack" ? signed(body) : telegramHeaders, body);
+      yield* connectors.step;
+      assert.equal(calls, 0);
+      assert.equal(h.sent[0]?.body.text, "Okay, I’m on it.");
+      const job = yield* store.claim();
+      assert.ok(job);
+      assert.equal(yield* coordinator.run(job), false);
+      yield* store.recover;
+      yield* connectors.step;
+      assert.equal(h.sent[1]?.body.text, "Checking saved context.");
+      yield* answer;
+      yield* connectors.step;
+      assert.deepEqual(
+        h.sent.map((message) => message.body.text),
+        ["Okay, I’m on it.", "Checking saved context.", "Here is the saved context."],
+      );
+      assert.equal(yield* connectors.step, false);
+      for (const message of h.sent) {
+        if (id === "work-slack") {
+          assert.equal(message.body.channel, "DCHAT");
+          assert.equal(message.body.thread_ts, "100.001");
+        } else {
+          assert.equal(message.body.chat_id, "42");
+          assert.deepEqual(message.body.reply_parameters, {
+            message_id: 5,
+            allow_sending_without_reply: true,
+          });
+        }
+      }
+    }).pipe(Effect.provide(h.layer));
+  },
+);
 
 it.effect.each([
   {
@@ -239,7 +311,7 @@ it.effect(
       assert.equal((yield* store.snapshot()).messages.length, 2);
       assert.equal(h.sent.length, 0);
       assert.equal(yield* connectors.step, true);
-      assert.equal(h.sent[0]?.body.text, "Received. I’m on it.");
+      assert.equal(h.sent[0]?.body.text, "Okay, I’m on it.");
       assert.equal(yield* connectors.step, false);
       yield* answer;
       assert.equal(yield* connectors.step, true);
@@ -337,7 +409,7 @@ it.effect(
       yield* connectors.receive("personal-telegram", telegramHeaders, telegram());
       assert.equal((yield* store.snapshot()).messages.length, 2);
       yield* connectors.step;
-      assert.equal(h.sent[0]?.body.text, "Received. I’m on it.");
+      assert.equal(h.sent[0]?.body.text, "Okay, I’m on it.");
       yield* answer;
       yield* connectors.step;
       assert.equal(h.sent.length, 2);
@@ -417,7 +489,7 @@ it.effect(
       );
       yield* connectors.step;
       assert.equal(h.sent.length, 3);
-      assert.equal(h.sent[1]?.body.text, "Received. I’m on it.");
+      assert.equal(h.sent[1]?.body.text, "Okay, I’m on it.");
       assert.equal(h.sent[2]?.body.text, "Here is the evidence.");
     }).pipe(Effect.provide(h.layer));
   },
@@ -528,12 +600,12 @@ it.effect("uses the selected OpenAI-compatible provider for both messaging conne
     const raw = slack();
     yield* connectors.receive("work-slack", signed(raw), raw);
     yield* connectors.step;
-    assert.equal(h.sent[0]?.body.text, "Received. I’m on it.");
+    assert.equal(h.sent[0]?.body.text, "Okay, I’m on it.");
     yield* answer;
     yield* connectors.step;
     yield* connectors.receive("personal-telegram", telegramHeaders, telegram());
     yield* connectors.step;
-    assert.equal(h.sent[2]?.body.text, "Received. I’m on it.");
+    assert.equal(h.sent[2]?.body.text, "Okay, I’m on it.");
     yield* answer;
     yield* connectors.step;
     assert.equal(h.modelRequests.length, 2);

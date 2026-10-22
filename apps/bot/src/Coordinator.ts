@@ -51,6 +51,7 @@ const decodePayload = Schema.decodeEffect(Schema.fromJsonString(Payload));
 const decodeResponsibility = Schema.decodeEffect(Schema.fromJsonString(BotResponsibility));
 const decodeSummary = Schema.decodeEffect(Schema.fromJsonString(Summary));
 const decodeTurn = Schema.decodeEffect(Turn);
+const decodeToolResult = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeModelStep = Schema.decodeEffect(
   Schema.fromJsonString(Schema.Struct({ message: BotChatMessage, tokens: Schema.Number })),
 );
@@ -241,7 +242,8 @@ const make = Effect.gen(function* () {
           ? internalTools
           : job.kind === "memory_review"
             ? tools.filter((t) => t.function.name === "remember")
-            : ["task_wake", "goal_wake", "agent_wake", "process_wake"].includes(job.kind)
+            : (job.kind === "turn" && payload.messageId !== undefined) ||
+                ["task_wake", "goal_wake", "agent_wake", "process_wake"].includes(job.kind)
               ? [...tools, silentTool]
               : tools,
       );
@@ -255,12 +257,31 @@ const make = Effect.gen(function* () {
     const silent =
       response.message.tool_calls?.some((call) => call.function.name === "complete_silently") ??
       false;
+    const userTurn = job.kind === "turn" && payload.messageId !== undefined;
     if (
       silent &&
-      (!["task_wake", "goal_wake", "agent_wake", "process_wake"].includes(job.kind) ||
+      ((!userTurn &&
+        !["task_wake", "goal_wake", "agent_wake", "process_wake"].includes(job.kind)) ||
         response.message.tool_calls?.length !== 1)
     )
       return yield* new BotError({ category: "invalid" });
+    if (silent && userTurn) {
+      const decision = turn.messages.findLastIndex((message) => message.role === "assistant");
+      const results = turn.messages
+        .slice(decision + 1)
+        .filter((message) => message.role === "tool");
+      if (!results.length) return yield* new BotError({ category: "invalid" });
+      for (const message of results) {
+        const result = yield* decodeToolResult(message.content ?? "null");
+        if (
+          typeof result === "object" &&
+          result !== null &&
+          "error" in result &&
+          result.error != null
+        )
+          return yield* new BotError({ category: "invalid" });
+      }
+    }
     const next = [...turn.messages, response.message];
     if (
       internal &&
@@ -269,6 +290,21 @@ const make = Effect.gen(function* () {
       )
     )
       return yield* new BotError({ category: "unauthorized" });
+    if (
+      !internal &&
+      job.kind !== "memory_review" &&
+      !silent &&
+      response.message.tool_calls?.length &&
+      response.message.content?.trim()
+    )
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          yield* checkLease(job);
+          if (!(yield* active)) return;
+          // Commit before tools: a slow operation must not hold back its progress message.
+          yield* store.append(`progress:${stepId}`, "assistant", response.message.content!, job.id);
+        }),
+      );
     for (const [index, call] of (response.message.tool_calls ?? []).entries()) {
       yield* checkLease(job);
       if (!(yield* active)) return true;
@@ -318,7 +354,13 @@ const make = Effect.gen(function* () {
         yield* checkLease(job);
         if (!(yield* active)) return;
         if (done && internal) yield* agents.complete(internal.id, response.message.content ?? "");
-        if (done && !silent && job.kind !== "memory_review" && !internal)
+        if (
+          done &&
+          !silent &&
+          job.kind !== "memory_review" &&
+          !internal &&
+          response.message.content?.trim()
+        )
           yield* store.append(
             `answer:${job.id}`,
             "assistant",

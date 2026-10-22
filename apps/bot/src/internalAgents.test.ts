@@ -14,110 +14,136 @@ import * as Store from "./Store.ts";
 import * as Records from "./Records.ts";
 import { BotConfig } from "./config.ts";
 
-it.effect("delegates independent work to a hidden session without a project or approval", () => {
-  let calls = 0;
-  const model = Layer.succeed(
-    Model.Model,
-    Model.Model.of({
-      complete: (_provider, messages, tools) =>
-        Effect.sync(() => {
-          calls++;
-          if (calls === 1)
-            return {
-              tokens: 10,
-              message: {
-                role: "assistant" as const,
-                content: null,
-                tool_calls: [
-                  {
-                    id: "delegate",
-                    type: "function" as const,
-                    function: {
-                      name: "delegate_task",
-                      arguments: JSON.stringify({
-                        title: "Compare sources",
-                        instructions: "Compare public sources",
-                        context: "Relevant user context",
-                      }),
+it.effect.each([false, true])(
+  "keeps independent sessions hidden with connected projects=%s",
+  (connected) => {
+    let calls = 0;
+    const model = Layer.succeed(
+      Model.Model,
+      Model.Model.of({
+        complete: (_provider, messages, tools) =>
+          Effect.sync(() => {
+            calls++;
+            if (calls === 1)
+              return {
+                tokens: 10,
+                message: {
+                  role: "assistant" as const,
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "delegate",
+                      type: "function" as const,
+                      function: {
+                        name: "delegate_task",
+                        arguments: JSON.stringify({
+                          title: "Compare sources",
+                          instructions: "Compare public sources",
+                          context: "Relevant user context",
+                        }),
+                      },
                     },
-                  },
-                ],
-              },
-            };
-          if (
-            messages[0]?.content?.startsWith("You are t3bot's internal worker") ||
-            tools.length <= 1
-          ) {
-            assert.ok(
-              !tools.some((t) =>
-                ["start_task", "delegate_task", "remember"].includes(t.function.name),
-              ),
-            );
-            assert.ok(!messages.some((m) => m.content?.includes("private unrelated conversation")));
+                  ],
+                },
+              };
+            if (
+              messages[0]?.content?.startsWith("You are t3bot's internal worker") ||
+              tools.length <= 1
+            ) {
+              assert.ok(
+                !tools.some((t) =>
+                  ["start_task", "delegate_task", "remember"].includes(t.function.name),
+                ),
+              );
+              assert.ok(
+                !messages.some((m) => m.content?.includes("private unrelated conversation")),
+              );
+              return {
+                tokens: 10,
+                message: { role: "assistant" as const, content: "Sources compared with evidence." },
+              };
+            }
             return {
               tokens: 10,
-              message: { role: "assistant" as const, content: "Sources compared with evidence." },
+              message: { role: "assistant" as const, content: "Your result is ready." },
             };
-          }
-          return {
-            tokens: 10,
-            message: { role: "assistant" as const, content: "Your result is ready." },
-          };
-        }),
-    }),
-  );
-  const config = Layer.succeed(BotConfig, {
-    provider: "test",
-    providers: [{ id: "test", model: "test", endpoint: "http://test", apiKey: "" }],
-  });
-  const layer = Coordinator.layer.pipe(
-    Layer.provide(model),
-    Layer.provideMerge(Store.layer),
-    Layer.provideMerge(Database.layer(":memory:")),
-    Layer.provide(config),
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provide(NodeServices.layer),
-  );
-  return Effect.gen(function* () {
-    const store = yield* Store.Store;
-    const coordinator = yield* Coordinator.Coordinator;
-    const sql = yield* SqlClient.SqlClient;
-    yield* store.append("old", "user", "private unrelated conversation");
-    yield* store.command({
-      type: "message",
-      requestId: "request",
-      text: "Compare public sources independently",
+          }),
+      }),
+    );
+    const config = Layer.succeed(BotConfig, {
+      provider: "test",
+      providers: [{ id: "test", model: "test", endpoint: "http://test", apiKey: "" }],
     });
-    const parent = yield* store.claim();
-    assert.ok(parent);
-    yield* coordinator.run(parent);
-    assert.equal((yield* sql`SELECT id FROM jobs WHERE kind='agent'`).length, 1);
-    assert.equal((yield* store.snapshot()).tasks.length, 0);
-    assert.equal((yield* store.snapshot()).environments.length, 0);
-    const parentContinuation = yield* store.claim();
-    assert.ok(parentContinuation);
-    yield* coordinator.run(parentContinuation);
-    const child = yield* store.claim("background");
-    assert.ok(child);
-    const agents = yield* AgentSessions.AgentSessions;
-    const agentId = (yield* sql<{ id: string }>`SELECT id FROM records WHERE kind='agent'`)[0]!.id;
-    yield* store.recover;
-    const resumed = yield* store.claim("background");
-    assert.ok(resumed);
-    assert.equal(resumed.id, child.id);
-    yield* coordinator.run(resumed);
-    const worker = yield* agents.get(agentId);
-    assert.equal(worker.status, "completed");
-    assert.equal(worker.result, "Sources compared with evidence.");
-    assert.ok(!(yield* store.snapshot()).messages.some((m) => m.text === worker.result));
-    const completion = yield* store.claim();
-    assert.ok(completion);
-    assert.equal(completion.kind, "agent_wake");
-    yield* coordinator.run(completion);
-    assert.equal((yield* sql`SELECT id FROM jobs WHERE kind='agent_wake'`).length, 1);
-    assert.equal((yield* store.snapshot()).messages.at(-1)?.text, "Your result is ready.");
-  }).pipe(Effect.provide(layer));
-});
+    const layer = Coordinator.layer.pipe(
+      Layer.provide(model),
+      Layer.provideMerge(Store.layer),
+      Layer.provideMerge(Database.layer(":memory:")),
+      Layer.provide(config),
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provide(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const store = yield* Store.Store;
+      const coordinator = yield* Coordinator.Coordinator;
+      const sql = yield* SqlClient.SqlClient;
+      if (connected) {
+        for (const id of ["local", "vm"]) {
+          yield* store.command(
+            { type: "environment.create", requestId: id, name: id },
+            `${id}-hash`,
+          );
+          yield* store.poll(id, `${id}-hash`, {
+            protocol: 1,
+            identity: `${id}-machine`,
+            projects: [
+              { id: `${id}-project`, title: "Workspace", instanceId: "worker", model: "test" },
+            ],
+          });
+        }
+      }
+      yield* store.append("old", "user", "private unrelated conversation");
+      yield* store.command({
+        type: "message",
+        requestId: "request",
+        text: "Compare public sources independently",
+      });
+      const parent = yield* store.claim();
+      assert.ok(parent);
+      yield* coordinator.run(parent);
+      assert.equal((yield* sql`SELECT id FROM jobs WHERE kind='agent'`).length, 1);
+      assert.equal((yield* store.snapshot()).tasks.length, 0);
+      assert.equal((yield* store.snapshot()).environments.length, connected ? 2 : 0);
+      assert.equal((yield* sql`SELECT id FROM bridge_commands`).length, 0);
+      const parentContinuation = yield* store.claim();
+      assert.ok(parentContinuation);
+      yield* coordinator.run(parentContinuation);
+      const child = yield* store.claim("background");
+      assert.ok(child);
+      const agents = yield* AgentSessions.AgentSessions;
+      const agentId = (yield* sql<{ id: string }>`SELECT id FROM records WHERE kind='agent'`)[0]!
+        .id;
+      yield* store.recover;
+      const resumed = yield* store.claim("background");
+      assert.ok(resumed);
+      assert.equal(resumed.id, child.id);
+      yield* coordinator.run(resumed);
+      const worker = yield* agents.get(agentId);
+      assert.equal(worker.status, "completed");
+      assert.equal(worker.result, "Sources compared with evidence.");
+      assert.ok(!(yield* store.snapshot()).messages.some((m) => m.text === worker.result));
+      const completion = yield* store.claim();
+      assert.ok(completion);
+      assert.equal(completion.kind, "agent_wake");
+      yield* coordinator.run(completion);
+      assert.equal((yield* sql`SELECT id FROM jobs WHERE kind='agent_wake'`).length, 1);
+      assert.ok((yield* sql`SELECT id FROM turns WHERE id=${resumed.id}`).length === 1);
+      assert.notEqual(resumed.id, parent.id);
+      assert.equal((yield* sql`SELECT id FROM bridge_commands`).length, 0);
+      assert.equal((yield* store.snapshot()).tasks.length, 0);
+      assert.equal((yield* store.snapshot()).messages.at(-1)?.text, "Your result is ready.");
+    }).pipe(Effect.provide(layer));
+  },
+);
 
 it.effect.each(["agent", "summary", "memory_review"] as const)(
   "keeps the main conversation available while %s is waiting",

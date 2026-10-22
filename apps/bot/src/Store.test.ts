@@ -148,8 +148,8 @@ it.effect(
       yield* store.command(command);
       const snapshot = yield* store.snapshot();
       assert.equal(snapshot.messages.length, 2);
-      assert.equal(snapshot.messages[1]?.role, "system");
-      assert.equal(snapshot.messages[1]?.text, "Received. I’m on it.");
+      assert.equal(snapshot.messages[1]?.role, "assistant");
+      assert.equal(snapshot.messages[1]?.text, "Okay, I’m on it.");
       assert.equal(snapshot.messages[1]?.createdAt, snapshot.messages[0]?.createdAt);
       assert.equal(snapshot.jobs.length, 1);
       const result = yield* store.command({ ...command, text: "Different" }).pipe(Effect.result);

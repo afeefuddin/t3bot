@@ -285,7 +285,7 @@ const make = Effect.gen(function* () {
             );
             yield* append(
               `ack:${input.requestId}`,
-              "system",
+              "assistant",
               messageAcknowledgement,
               input.requestId,
             );

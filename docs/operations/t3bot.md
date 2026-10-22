@@ -158,6 +158,38 @@ database initialization. Failed/retrying background jobs appear in Activity.
 The bot records work before dispatch and reconciles commands after reconnect;
 it cannot guarantee exactly-once arbitrary external side effects.
 
+## Update a hosted bot
+
+From your checkout, update an existing Docker Compose deployment over SSH:
+
+```sh
+vp run bot:update afeef-devbox
+vp run bot:rollback afeef-devbox
+```
+
+Without a global `vp`, use `node scripts/bot-update.ts afeef-devbox` and add
+`--rollback` to restore the previous image.
+
+The SSH host can be any configured alias. The remote Compose directory defaults
+to `~/t3bot`; use `--directory /srv/t3bot` to choose another. It must contain
+`compose.yaml` with a single `bot` service using a tagged image and a healthcheck.
+The host needs Docker Compose with `--wait` support and `flock`.
+
+Update builds the current checkout, including uncommitted bot changes. It uploads
+the bundle, validates configuration against a database copy, backs up SQLite, and
+restarts only the bot. Its URL, credentials, pairings, memory, and pending work stay
+in the existing volumes. Project executors and clients keep running; no client
+reinstall is needed for a bot-only change.
+
+Run updates while the bot is idle. Active coordinator jobs, hosted processes, or outgoing
+message deliveries block an update. A failed activation restores the previous image automatically;
+rollback switches to the previous successful image without rewinding data.
+Schema changes require a planned migration and are refused by this command.
+Database backups remain under `.updates` in the bot's data volume; deployment
+records and retained images remain on the host. Keep backups private and prune
+older releases manually when no longer needed. `/health` reports the running
+release ID.
+
 ## Backup and restore
 
 Use SQLite's online backup, which includes committed WAL contents:

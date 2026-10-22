@@ -62,7 +62,7 @@ export const tools: ReadonlyArray<BotTool> = [
     function: {
       name: "terminal",
       description:
-        "Run a shell command with unattended approval in the bot-owned hosted workspace, never a connected project's directory. Use for general computation or bot-local artifacts. Returns a tracked process handle and bounded output. background=true returns immediately; otherwise waits briefly. Use process to inspect, wait or stop. Use start_task for work in the owner's project or connected machine.",
+        "Run a shell command with unattended approval in the bot-owned hosted workspace, never a connected project's directory. Use for general computation or bot-local artifacts. Returns a tracked process handle and bounded output. background=true returns immediately; otherwise waits briefly. Use process to inspect, wait or stop. Use start_task only for work belonging to a specific authorized project. A connected machine alone is not a project assignment.",
       parameters: object({ command: text, background: { type: "boolean" } }),
     },
   },
@@ -243,7 +243,7 @@ export const tools: ReadonlyArray<BotTool> = [
     function: {
       name: "start_task",
       description:
-        "Start independent work in an authorized T3 environment/project. For implementation, attach the durable goalId. Set threadId to an idle existing thread from list_project_threads to continue relevant work in its workspace, or null for a new thread. It returns immediately. Use an isolated worktree for code changes. You cannot claim completion until the actual result arrives.",
+        "Start project-related work in a specific authorized T3 project. This creates or continues a normal project thread visible in the client sidebar, even while running in the background. Never select an unrelated project for general research or personal tasks; use delegate_task for a hidden independent session instead. For implementation, attach the durable goalId. Set threadId to an idle existing thread from list_project_threads to continue relevant work in its workspace, or null for a new thread. It returns immediately. Use an isolated worktree for code changes. You cannot claim completion until the actual result arrives.",
       parameters: object({
         goalId: nullableText,
         threadId: nullableText,
@@ -339,7 +339,7 @@ export const silentTool: BotTool = {
   function: {
     name: "complete_silently",
     description:
-      "Finish this background wake without sending the owner a message when there is no useful update. Call alone, after any necessary tools. The persisted watch continues; do not send repetitive still-running messages.",
+      "Finish without another owner-facing message when there is no useful update. On a user request, only after necessary tools succeeded; the acknowledgement was already delivered. Never hide errors or omit a requested answer. On a background wake, stay quiet when there is nothing useful to report. Call alone. Persisted watches and reminders continue.",
     parameters: object({}),
   },
 };

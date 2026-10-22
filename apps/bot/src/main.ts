@@ -125,6 +125,12 @@ const run = async <A>(effect: Effect.Effect<A, BotError>): Promise<A> => {
 const store = await runtime.runPromise(Store.Store);
 const worker = await runtime.runPromise(Worker.Worker);
 const connectorService = await runtime.runPromise(Connectors.Connectors);
+if (process.argv[2] === "check") {
+  await runtime.dispose();
+  ownerLock.close();
+  process.stdout.write("Bot configuration and database validated; no jobs were started.\n");
+  process.exit(0);
+}
 await run(store.recover);
 const processes = await runtime.runPromise(Processes.Processes);
 await run(processes.recover);
@@ -157,7 +163,7 @@ const server = NodeHttp.createServer(async (request, response) => {
   const reply = (value: unknown) => response.end(JSON.stringify(value));
   try {
     if (url.pathname === "/health") {
-      reply({ status: "ready", protocol: 1 });
+      reply({ status: "ready", protocol: 1, release: process.env.T3BOT_RELEASE ?? "development" });
       return;
     }
     const bridge = /^\/bridge\/([^/]+)\/(poll|report)$/.exec(url.pathname);
